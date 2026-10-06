@@ -1,0 +1,1131 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LESchess — шахматы с чатом</title>
+<link rel="icon" type="image/png" sizes="512x512" href="/favicon-512.png">
+<link rel="icon" type="image/png" sizes="192x192" href="/favicon-192.png">
+<link rel="icon" type="image/png" sizes="48x48" href="/favicon-48.png">
+<link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png">
+<link rel="icon" type="image/png" sizes="16x16" href="/favicon-16.png">
+<link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
+<style>
+/* ============ Токены — скопированы из /root/LESogram/frontend/src/app.css ============ */
+:root {
+    --bg: #0f172a;
+    --card: #111827;
+    --card-2: #0b1220;
+    --panel: #020617;
+    --accent: #22c55e;
+    --accent-2: #16a34a;
+    --accent-line: rgba(34, 197, 94, 0.26);
+    --text: #e5e7eb;
+    --muted: #9ca3af;
+    --muted-2: #cbd5e1;
+    --danger: #ef4444;
+    --border: #1f2937;
+    --shadow: 0 18px 45px rgba(2, 6, 23, 0.42);
+
+    --radius-lg: 22px;
+    --radius-md: 16px;
+    --radius-sm: 12px;
+
+    --page-padding: 24px;
+}
+
+* { box-sizing: border-box; }
+
+html {
+    height: 100%;
+    -webkit-text-size-adjust: 100%;
+    overflow-x: clip;
+}
+
+body {
+    margin: 0;
+    min-height: 100dvh;
+    font-family: "Trebuchet MS", "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+    background:
+        radial-gradient(circle at top right, rgba(34, 197, 94, 0.16), transparent 24%),
+        radial-gradient(circle at 15% 18%, rgba(59, 130, 246, 0.10), transparent 26%),
+        radial-gradient(circle at bottom left, rgba(16, 185, 129, 0.08), transparent 30%),
+        linear-gradient(180deg, rgba(255, 255, 255, 0.02), transparent 30%),
+        var(--bg);
+    color: var(--text);
+    min-width: 320px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: var(--page-padding);
+}
+
+button, input, select, textarea {
+    font: inherit;
+    max-width: 100%;
+    border: none;
+    outline: none;
+}
+
+button { min-height: 44px; }
+
+input, select {
+    min-height: 44px;
+    width: 100%;
+    padding: 11px 13px;
+    border-radius: var(--radius-sm);
+    border: 1px solid transparent;
+    background: var(--panel);
+    color: white;
+    margin-bottom: 10px;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
+}
+
+input::placeholder { color: #7c8aa1; }
+
+input:focus {
+    outline: none;
+    border-color: var(--accent-line);
+    box-shadow: 0 0 0 4px rgba(34, 197, 94, 0.10);
+}
+
+button {
+    width: 100%;
+    padding: 11px 13px;
+    border-radius: var(--radius-sm);
+    border: 1px solid transparent;
+    background: linear-gradient(135deg, var(--accent), var(--accent-2));
+    color: #04120a;
+    cursor: pointer;
+    font-weight: bold;
+    box-shadow: 0 10px 24px rgba(22, 163, 74, 0.18);
+    transition: transform 0.15s ease, opacity 0.15s ease, box-shadow 0.15s ease;
+    touch-action: manipulation;
+}
+
+button:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 14px 28px rgba(22, 163, 74, 0.24);
+}
+
+button:active { transform: translateY(0); }
+button:disabled { opacity: 0.6; cursor: not-allowed; transform: none; }
+
+.secondary {
+    background: linear-gradient(180deg, #3a475c, #334155);
+    color: white;
+    box-shadow: none;
+}
+
+.small-btn {
+    width: auto;
+    min-height: 38px;
+    padding: 8px 12px;
+    flex-shrink: 0;
+}
+
+/* ============ Панели (как .panel/.chat-panel в LESogram) ============ */
+.glass-panel {
+    background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.03), transparent 26%),
+        rgba(17, 24, 39, 0.96);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow);
+    border: 1px solid rgba(148, 163, 184, 0.10);
+    backdrop-filter: blur(14px);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+.header {
+    flex-shrink: 0;
+    background:
+        linear-gradient(90deg, rgba(34, 197, 94, 0.08), transparent 28%),
+        rgba(2, 6, 23, 0.92);
+    padding: 16px 18px;
+    font-weight: bold;
+    border-bottom: 1px solid rgba(148, 163, 184, 0.08);
+}
+
+.brand {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-width: 0;
+}
+
+.brand-logo {
+    width: 40px;
+    height: 40px;
+    flex-shrink: 0;
+    border-radius: 12px;
+    object-fit: cover;
+    box-shadow: 0 0 0 1px rgba(148, 163, 184, 0.14), 0 8px 18px rgba(2, 6, 23, 0.45);
+}
+
+.brand-copy { min-width: 0; }
+
+.brand-title {
+    font-size: 17px;
+    letter-spacing: 0.02em;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.brand-subtitle {
+    margin-top: 2px;
+    font-size: 12px;
+    font-weight: normal;
+    color: var(--muted);
+    line-height: 1.35;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.section { padding: 18px; }
+
+.section-block {
+    padding: 14px;
+    border-radius: var(--radius-md);
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.02), rgba(2, 6, 23, 0.20));
+    border: 1px solid rgba(148, 163, 184, 0.08);
+}
+
+.section-title {
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    color: var(--muted);
+    margin-bottom: 12px;
+    font-weight: bold;
+}
+
+.status {
+    font-size: 13px;
+    color: var(--muted);
+    margin-top: 8px;
+    min-height: 18px;
+    line-height: 1.4;
+}
+
+.error-text { color: var(--danger); }
+
+/* ============ Auth-экран ============ */
+#authWrap {
+    width: min(420px, 100%);
+    margin: auto 0;
+    animation: msgIn 0.25s cubic-bezier(0.2, 0.8, 0.3, 1.02) backwards;
+}
+
+/* ============ Лобби ============ */
+#lobbyWrap {
+    width: min(560px, 100%);
+    margin: auto 0;
+    animation: msgIn 0.25s cubic-bezier(0.2, 0.8, 0.3, 1.02) backwards;
+}
+
+.room-item {
+    background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.02), transparent 60%),
+        var(--card-2);
+    padding: 13px;
+    border-radius: var(--radius-md);
+    margin-bottom: 10px;
+    border: 1px solid rgba(148, 163, 184, 0.08);
+    transition:
+        transform 0.18s cubic-bezier(0.2, 0.8, 0.3, 1.05),
+        border-color 0.18s ease,
+        box-shadow 0.18s ease,
+        background 0.18s ease;
+    min-width: 0;
+    cursor: pointer;
+    animation: roomIn 0.25s cubic-bezier(0.2, 0.8, 0.3, 1.02) backwards;
+}
+
+@keyframes roomIn {
+    from { opacity: 0; transform: translateY(8px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+.room-item:hover {
+    transform: translateY(-2px);
+    border-color: rgba(34, 197, 94, 0.22);
+    box-shadow: 0 12px 28px rgba(2, 6, 23, 0.28);
+    background:
+        linear-gradient(180deg, rgba(34, 197, 94, 0.05), transparent 60%),
+        var(--card-2);
+}
+
+.room-item:active { transform: translateY(0) scale(0.99); }
+
+#roomList .room-item:nth-child(1) { animation-delay: 0ms; }
+#roomList .room-item:nth-child(2) { animation-delay: 35ms; }
+#roomList .room-item:nth-child(3) { animation-delay: 70ms; }
+#roomList .room-item:nth-child(4) { animation-delay: 105ms; }
+#roomList .room-item:nth-child(n+5) { animation-delay: 140ms; }
+
+.room-title {
+    font-weight: bold;
+    font-size: 15px;
+    overflow-wrap: anywhere;
+}
+
+.room-meta {
+    font-size: 12px;
+    color: var(--muted);
+    margin: 6px 0 10px;
+    line-height: 1.4;
+}
+
+.section-pill {
+    display: inline-flex;
+    flex-shrink: 0;
+    padding: 6px 10px;
+    border-radius: 999px;
+    font-size: 12px;
+    color: var(--muted-2);
+    background: rgba(148, 163, 184, 0.08);
+    border: 1px solid rgba(148, 163, 184, 0.08);
+    white-space: nowrap;
+}
+
+/* ============ Игровая комната ============ */
+#gameWrap {
+    width: min(1100px, 100%);
+    margin: auto 0;
+    animation: msgIn 0.25s cubic-bezier(0.2, 0.8, 0.3, 1.02) backwards;
+}
+
+.header-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+.header-actions {
+    display: flex;
+    gap: 8px;
+    flex-shrink: 0;
+}
+
+.turn-badge {
+    font-size: 13px;
+    color: var(--muted);
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    min-height: 22px;
+}
+
+.turn-badge .dot {
+    width: 11px;
+    height: 11px;
+    border-radius: 999px;
+    background: #f8fafc;
+    box-shadow: 0 0 0 3px rgba(148, 163, 184, 0.14);
+    flex-shrink: 0;
+}
+
+.turn-badge .dot.black {
+    background: #111;
+    border: 1px solid #475569;
+}
+
+.turn-badge.yourturn {
+    color: #86efac;
+    font-weight: bold;
+}
+
+.game-area {
+    display: flex;
+    gap: 18px;
+    padding: 18px;
+    align-items: flex-start;
+    flex-wrap: wrap;
+}
+
+/* --- Доска --- */
+.board-wrap {
+    position: relative;
+    flex-shrink: 0;
+}
+
+.board {
+    display: grid;
+    grid-template-columns: repeat(8, 1fr);
+    width: min(92vw, 540px, calc(100dvh - 260px));
+    aspect-ratio: 1;
+    border-radius: var(--radius-md);
+    overflow: hidden;
+    border: 2px solid rgba(148, 163, 184, 0.14);
+    box-shadow: 0 18px 45px rgba(2, 6, 23, 0.42);
+    user-select: none;
+    touch-action: manipulation;
+}
+
+.cell {
+    position: relative;
+    display: grid;
+    place-items: center;
+    cursor: pointer;
+    aspect-ratio: 1;
+}
+
+.cell.light { background: #b8ccd4; }
+.cell.dark { background: #4a6d7c; }
+
+.cell.sel::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: rgba(34, 197, 94, 0.35);
+    z-index: 3;
+}
+
+.cell.lastmove { box-shadow: inset 0 0 0 3px rgba(34, 197, 94, 0.6); }
+.cell.check { box-shadow: inset 0 0 0 3px var(--danger); }
+
+.cell .piece {
+    font-size: min(9.5vw, 58px, calc((100dvh - 260px) / 8));
+    line-height: 1;
+    z-index: 2;
+    transition: transform 0.12s ease;
+    pointer-events: none;
+    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.6);
+}
+
+.cell:hover .piece { transform: scale(1.08); }
+
+.cell .hintdot {
+    position: absolute;
+    width: 26%;
+    height: 26%;
+    border-radius: 999px;
+    background: rgba(2, 6, 23, 0.45);
+    z-index: 1;
+}
+
+.cell.hintcap::before {
+    content: '';
+    position: absolute;
+    width: 84%;
+    height: 84%;
+    border-radius: 999px;
+    border: 4px solid rgba(239, 68, 68, 0.55);
+    z-index: 1;
+}
+
+.coord {
+    position: absolute;
+    font-size: 10px;
+    color: rgba(15, 23, 42, 0.55);
+    font-weight: bold;
+    z-index: 1;
+}
+
+.coord.file { bottom: 2px; right: 4px; }
+.coord.rank { top: 2px; left: 4px; }
+.cell.dark .coord { color: rgba(226, 232, 240, 0.5); }
+
+/* --- Сайд-панель --- */
+.side {
+    flex: 1;
+    min-width: 300px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+}
+
+.players-box { display: flex; flex-direction: column; gap: 8px; }
+
+.player-row {
+    display: grid;
+    grid-template-columns: 38px minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 10px;
+    padding: 10px;
+    border-radius: 14px;
+    transition: background 0.15s ease, transform 0.15s ease;
+}
+
+.player-row:hover { background: rgba(148, 163, 184, 0.08); }
+
+.player-avatar {
+    width: 38px;
+    height: 38px;
+    border-radius: 999px;
+    display: grid;
+    place-items: center;
+    background: linear-gradient(135deg, var(--accent), var(--accent-2));
+    color: #04120a;
+    font-weight: bold;
+    box-shadow: 0 8px 18px rgba(22, 163, 74, 0.20);
+}
+
+.player-avatar.b {
+    background: linear-gradient(135deg, #64748b, #334155);
+    color: white;
+}
+
+.player-name {
+    min-width: 0;
+    font-weight: bold;
+    color: var(--text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.player-badge {
+    padding: 5px 8px;
+    border-radius: 999px;
+    background: rgba(34, 197, 94, 0.12);
+    border: 1px solid rgba(34, 197, 94, 0.16);
+    color: #86efac;
+    font-size: 11px;
+    font-weight: bold;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+.player-badge.pending {
+    background: rgba(148, 163, 184, 0.08);
+    border-color: rgba(148, 163, 184, 0.12);
+    color: var(--muted);
+    font-style: italic;
+    text-transform: none;
+}
+
+/* --- Чат (как в LESogram) --- */
+.chat { display: flex; flex-direction: column; min-height: 320px; }
+
+.chat-log {
+    flex: 1;
+    min-height: 220px;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding: 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    background:
+        radial-gradient(circle at top center, rgba(34, 197, 94, 0.06), transparent 34%),
+        linear-gradient(180deg, rgba(255, 255, 255, 0.02), transparent 16%);
+}
+
+.msg {
+    max-width: min(82%, 620px);
+    padding: 13px 14px;
+    border-radius: 18px;
+    word-break: break-word;
+    overflow-wrap: anywhere;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    box-shadow: 0 12px 28px rgba(2, 6, 23, 0.18);
+    align-items: flex-start;
+    width: fit-content;
+    animation: msgIn 0.22s cubic-bezier(0.2, 0.8, 0.3, 1.05);
+}
+
+@keyframes msgIn {
+    from { opacity: 0; transform: translateY(10px) scale(0.98); }
+    to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.msg.me {
+    align-self: flex-end;
+    background: linear-gradient(135deg, #22c55e, #84cc16);
+    color: #05140b;
+    border-bottom-right-radius: 6px;
+}
+
+.msg.other {
+    align-self: flex-start;
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.02), #1f2937);
+    color: var(--text);
+    border: 1px solid rgba(148, 163, 184, 0.06);
+    border-bottom-left-radius: 6px;
+}
+
+.msg.system {
+    max-width: min(90%, 560px);
+    align-self: center;
+    color: var(--muted);
+    font-size: 12px;
+    background: rgba(148, 163, 184, 0.08);
+    padding: 6px 12px;
+    border-radius: 999px;
+    border: 1px solid rgba(148, 163, 184, 0.08);
+    box-shadow: none;
+    text-align: center;
+}
+
+.msg-username {
+    font-size: 12px;
+    font-weight: bold;
+    opacity: 0.92;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+}
+
+.msg-text { white-space: pre-wrap; line-height: 1.45; }
+
+/* --- Композер (как в LESogram) --- */
+.composer {
+    flex-shrink: 0;
+    border-top: 1px solid var(--border);
+    padding: 14px;
+    background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.03), transparent 60%),
+        rgba(2, 6, 23, 0.56);
+    position: relative;
+}
+
+.input-row {
+    display: flex;
+    gap: 8px;
+    align-items: stretch;
+}
+
+.input-row input {
+    margin: 0;
+    flex: 1;
+    min-width: 0;
+}
+
+.input-row button {
+    flex-shrink: 0;
+    width: 44px;
+    min-width: 44px;
+    padding: 9px 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.input-row button svg {
+    width: 18px;
+    height: 18px;
+    transition: transform 0.18s cubic-bezier(0.2, 0.9, 0.3, 1.3);
+}
+
+.input-row button:not(:disabled):hover svg {
+    transform: translateX(3px);
+}
+
+/* --- Gameover оверлей --- */
+.gameover {
+    position: absolute;
+    inset: 0;
+    display: none;
+    place-items: center;
+    background: rgba(15, 23, 42, 0.82);
+    backdrop-filter: blur(4px);
+    border-radius: var(--radius-md);
+    z-index: 10;
+}
+
+.gameover.show { display: grid; }
+
+.go-inner {
+    text-align: center;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    align-items: center;
+    padding: 20px;
+    animation: popupIn 0.2s cubic-bezier(0.2, 0.9, 0.3, 1.1);
+}
+
+@keyframes popupIn {
+    from { opacity: 0; transform: translateY(-8px) scale(0.97); }
+    to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.go-inner .go-title { font-size: 26px; font-weight: bold; }
+.go-inner .go-sub { color: var(--muted-2); font-size: 14px; }
+.go-inner button { width: auto; padding: 11px 18px; }
+
+/* ============ Иконки (из icons.ts LESogram, stroke 1.8) ============ */
+.icon {
+    display: inline-block;
+    vertical-align: middle;
+    stroke: currentColor;
+    fill: none;
+    stroke-width: 1.8;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+}
+
+/* ============ Мобилка ============ */
+@media (max-width: 900px) {
+    body { padding: 12px; }
+
+    .game-area {
+        flex-direction: column;
+        align-items: center;
+        padding: 12px;
+    }
+
+    .side { width: 100%; min-width: 0; }
+    .board { width: min(96vw, 480px, calc(100dvh - 320px)); }
+    .cell .piece { font-size: min(9.5vw, 48px, calc((100dvh - 320px) / 8)); }
+
+    .header-row { flex-wrap: wrap; }
+    .chat-log { min-height: 160px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+        animation-duration: 0.01ms !important;
+        transition-duration: 0.01ms !important;
+    }
+}
+</style>
+</head>
+<body>
+
+<!-- ============ Экран входа ============ -->
+<div id="authWrap" class="glass-panel">
+    <div class="header">
+        <div class="brand">
+            <img class="brand-logo" src="/logo.png" alt="LESchess">
+            <div class="brand-copy">
+                <div class="brand-title">LESchess</div>
+                <div class="brand-subtitle">Шахматы с живым чатом и комнатами</div>
+            </div>
+        </div>
+    </div>
+    <div class="section">
+        <div class="section-title">Игрок</div>
+        <input id="nameInput" maxlength="20" placeholder="Твоё имя" autocomplete="off">
+        <button id="joinBtn" type="button">Играть</button>
+        <div id="joinStatus" class="status"></div>
+    </div>
+</div>
+
+<!-- ============ Лобби ============ -->
+<div id="lobbyWrap" class="glass-panel">
+    <div class="header">
+        <div class="brand">
+            <img class="brand-logo" src="/logo.png" alt="LESchess">
+            <div class="brand-copy">
+                <div class="brand-title">LESchess</div>
+                <div class="brand-subtitle" id="meLabel"></div>
+            </div>
+        </div>
+    </div>
+    <div class="section">
+        <div class="section-title-row" style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:12px">
+            <div class="section-title" style="margin-bottom:0">Комнаты</div>
+            <button id="createBtn" class="small-btn" type="button">+ Новая</button>
+        </div>
+        <div id="roomList"></div>
+    </div>
+</div>
+
+<!-- ============ Игровая комната ============ -->
+<div id="gameWrap" class="glass-panel">
+    <div class="header">
+        <div class="header-row">
+            <div class="brand">
+                <div class="brand-copy">
+                    <div class="brand-title" id="roomName"></div>
+                    <div class="turn-badge" id="turnBadge"></div>
+                </div>
+            </div>
+            <div class="header-actions">
+                <button id="resetBtn" class="secondary small-btn" type="button">Новая партия</button>
+                <button id="leaveBtn" class="secondary small-btn" type="button">Выйти</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="game-area">
+        <div class="board-wrap">
+            <div class="board" id="board"></div>
+            <div class="gameover" id="gameover">
+                <div class="go-inner">
+                    <div class="go-title" id="goTitle"></div>
+                    <div class="go-sub" id="goSub"></div>
+                    <button id="goBtn" type="button">Играть снова</button>
+                </div>
+            </div>
+        </div>
+
+        <div class="side">
+            <div class="section-block">
+                <div class="section-title">Игроки</div>
+                <div class="players-box" id="playersBox"></div>
+            </div>
+
+            <div class="glass-panel chat" style="flex:1;min-height:0">
+                <div class="section" style="padding:14px 18px 0 18px;flex-shrink:0">
+                    <div class="section-title">Чат комнаты</div>
+                </div>
+                <div class="chat-log" id="chatLog"></div>
+                <div class="composer">
+                    <div class="input-row">
+                        <input id="chatInput" maxlength="500" placeholder="Сообщение..." autocomplete="off">
+                        <button id="sendBtn" type="button" title="Отправить">
+                            <svg class="icon" viewBox="0 0 24 24"><path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"/></svg>
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+'use strict';
+const PIECES = {
+  wK: '♔', wQ: '♕', wR: '♖', wB: '♗', wN: '♘', wP: '♙',
+  bK: '♚', bQ: '♛', bR: '♜', bB: '♝', bN: '♞', bP: '♟'
+};
+const FILES = 'abcdefgh';
+
+const $ = id => document.getElementById(id);
+const authWrap = $('authWrap'), lobbyWrap = $('lobbyWrap'), gameWrap = $('gameWrap');
+const boardEl = $('board'), chatLog = $('chatLog'), chatInput = $('chatInput');
+const nameInput = $('nameInput'), joinStatus = $('joinStatus');
+
+let ws = null;
+let me = null;
+let myColor = null;
+let room = null;
+let state = null;
+let players = {w: null, b: null};
+let sel = null;
+let hints = [];
+let lastMove = null;
+let inRoom = false;
+
+// ---------- WS ----------
+function wsUrl() {
+  const l = location;
+  return (l.protocol === 'https:' ? 'wss://' : 'ws://') + l.hostname + ':8091';
+}
+function connect() {
+  ws = new WebSocket(wsUrl());
+  ws.onmessage = e => {
+    try { handleMessage(JSON.parse(e.data)); } catch (err) { console.error(err); }
+  };
+  ws.onclose = () => {
+    if (inRoom) {
+      addChatMsg({type: 'system', text: 'Соединение потеряно, переподключение...'});
+      setTimeout(connect, 2000);
+    }
+  };
+  ws.onopen = () => {
+    const target = sessionStorage.getItem('chess_room');
+    const saved = localStorage.getItem('chess_name');
+    if (target && saved) {
+      send({type: 'join', name: saved, room: target, roomName: sessionStorage.getItem('chess_room_name') || target});
+    }
+  };
+}
+function send(obj) {
+  if (ws && ws.readyState === 1) ws.send(JSON.stringify(obj));
+}
+
+// ---------- Экраны ----------
+function showScreen(which) {
+  authWrap.style.display = which === 'auth' ? 'flex' : 'none';
+  lobbyWrap.style.display = which === 'lobby' ? 'flex' : 'none';
+  gameWrap.style.display = which === 'room' ? 'flex' : 'none';
+}
+showScreen('auth');
+
+// ---------- Сообщения ----------
+function handleMessage(m) {
+  switch (m.type) {
+    case 'welcome':
+      me = m.name;
+      myColor = m.color;
+      room = m.room;
+      players = m.players;
+      state = m.state;
+      inRoom = true;
+      sessionStorage.setItem('chess_room', m.room.id);
+      localStorage.setItem('chess_name', me);
+      showScreen('room');
+      $('roomName').textContent = m.room.name;
+      chatLog.innerHTML = '';
+      lastMove = null; sel = null; hints = [];
+      renderRoom();
+      m.chat.forEach(addChatMsg);
+      break;
+    case 'room':
+      if (room && m.room.id === room.id) {
+        room = m.room;
+        $('roomName').textContent = room.name;
+      }
+      break;
+    case 'state':
+      state = m.state;
+      renderRoom();
+      break;
+    case 'move':
+      lastMove = {from: m.from, to: m.to};
+      state = m.state;
+      sel = null; hints = [];
+      renderRoom();
+      break;
+    case 'chat':
+      addChatMsg(m);
+      break;
+    case 'system':
+      addChatMsg({type: 'system', text: m.text});
+      if (m.state) { state = m.state; sel = null; hints = []; lastMove = null; renderRoom(); }
+      break;
+    case 'players':
+      players = m.players;
+      renderPlayers();
+      renderBadge();
+      break;
+    case 'moves':
+      if (sel && sel[0] === m.x && sel[1] === m.y) {
+        hints = m.moves;
+        renderBoard();
+      }
+      break;
+    case 'error':
+      if (joinStatus.style.display !== 'none' && !inRoom) {
+        joinStatus.textContent = m.text;
+        joinStatus.classList.add('error-text');
+      } else {
+        flashError(m.text);
+      }
+      break;
+  }
+}
+
+function flashError(text) {
+  const badge = $('turnBadge');
+  badge.innerHTML = '<span class="error-text">⚠ ' + esc(text) + '</span>';
+  setTimeout(renderBadge, 2000);
+}
+
+// ---------- Рендер ----------
+function renderRoom() {
+  renderBoard();
+  renderPlayers();
+  renderBadge();
+  renderGameover();
+}
+
+function renderPlayers() {
+  const box = $('playersBox');
+  const w = players.w, b = players.b;
+  box.innerHTML =
+    '<div class="player-row">' +
+      '<div class="player-avatar">В</div>' +
+      '<div class="player-name">' + (w ? esc(w) + (w === me ? ' <span style="color:var(--muted);font-weight:normal">(ты)</span>' : '') : '') + '</div>' +
+      '<div class="player-badge' + (w ? '' : ' pending') + '">' + (w ? 'белые' : 'ждём...') + '</div>' +
+    '</div>' +
+    '<div class="player-row">' +
+      '<div class="player-avatar b">Ч</div>' +
+      '<div class="player-name">' + (b ? esc(b) + (b === me ? ' <span style="color:var(--muted);font-weight:normal">(ты)</span>' : '') : '') + '</div>' +
+      '<div class="player-badge' + (b ? '' : ' pending') + '">' + (b ? 'чёрные' : 'ждём...') + '</div>' +
+    '</div>';
+}
+
+function renderBadge() {
+  const badge = $('turnBadge');
+  if (!state) return;
+  if (state.status !== 'active') {
+    badge.innerHTML = 'Партия окончена';
+    badge.className = 'turn-badge';
+    return;
+  }
+  const waiting = !players.w || !players.b;
+  if (waiting) {
+    badge.innerHTML = 'Ждём второго игрока...';
+    badge.className = 'turn-badge';
+    return;
+  }
+  const my = state.turn === myColor;
+  const who = state.turn === 'w' ? 'Ход белых' : 'Ход чёрных';
+  const check = state.inCheck ? ' • ШАХ!' : '';
+  badge.className = 'turn-badge' + (my ? ' yourturn' : '');
+  badge.innerHTML = '<div class="dot ' + (state.turn === 'b' ? 'black' : '') + '"></div>' + (my ? 'Твой ход' : who) + check;
+}
+
+function renderGameover() {
+  const go = $('gameover');
+  if (!state || state.status === 'active') { go.classList.remove('show'); return; }
+  go.classList.add('show');
+  const t = $('goTitle'), s = $('goSub');
+  if (state.status === 'checkmate') {
+    t.textContent = state.result === 'w' ? 'Мат! Победили белые' : 'Мат! Победили чёрные';
+    t.style.color = 'var(--accent)';
+  } else if (state.status === 'stalemate') {
+    t.textContent = 'Пат — ничья';
+    t.style.color = 'var(--muted-2)';
+  }
+  const winner = state.result === 'w' ? players.w : players.b;
+  s.textContent = (state.status === 'checkmate' && winner)
+    ? winner + ' выигрывает партию. Сыграть ещё?'
+    : 'Никто не победил. Сыграть ещё?';
+}
+
+// ---------- Доска ----------
+function renderBoard() {
+  if (!state) return;
+  const flip = myColor === 'b';
+  boardEl.innerHTML = '';
+  for (let vy = 0; vy < 8; vy++) {
+    for (let vx = 0; vx < 8; vx++) {
+      const x = flip ? 7 - vx : vx;
+      const y = flip ? 7 - vy : vy;
+      const cell = document.createElement('div');
+      const isLight = (x + y) % 2 === 0;
+      cell.className = 'cell ' + (isLight ? 'light' : 'dark');
+      cell.dataset.x = x;
+      cell.dataset.y = y;
+
+      const p = state.board[y][x];
+      if (p) {
+        const s = document.createElement('span');
+        s.className = 'piece';
+        s.textContent = PIECES[p];
+        cell.appendChild(s);
+      }
+      if (sel && sel[0] === x && sel[1] === y) cell.classList.add('sel');
+      if (lastMove && ((lastMove.from[0] === x && lastMove.from[1] === y) ||
+                       (lastMove.to[0] === x && lastMove.to[1] === y))) cell.classList.add('lastmove');
+      if (state.inCheck && state.status === 'active' && p === state.turn + 'K') cell.classList.add('check');
+      if (hints.some(h => h[0] === x && h[1] === y)) {
+        if (state.board[y][x]) cell.classList.add('hintcap');
+        else {
+          const hint = document.createElement('div');
+          hint.className = 'hintdot';
+          cell.appendChild(hint);
+        }
+      }
+      if (vy === 7) { const c = document.createElement('span'); c.className = 'coord file'; c.textContent = FILES[x]; cell.appendChild(c); }
+      if (vx === 0) { const c = document.createElement('span'); c.className = 'coord rank'; c.textContent = 8 - y; cell.appendChild(c); }
+
+      cell.addEventListener('click', () => onCellClick(x, y));
+      boardEl.appendChild(cell);
+    }
+  }
+}
+
+function onCellClick(x, y) {
+  if (!state || state.status !== 'active') return;
+  const p = state.board[y][x];
+  if (sel && hints.some(h => h[0] === x && h[1] === y)) {
+    send({type: 'move', from: sel, to: [x, y]});
+    return;
+  }
+  if (p && p[0] === myColor && p[0] === state.turn) {
+    if (sel && sel[0] === x && sel[1] === y) {
+      sel = null; hints = [];
+      renderBoard();
+      return;
+    }
+    sel = [x, y];
+    hints = [];
+    renderBoard();
+    send({type: 'moves', x, y});
+    return;
+  }
+  sel = null; hints = [];
+  renderBoard();
+}
+
+// ---------- Чат ----------
+function addChatMsg(m) {
+  const div = document.createElement('div');
+  if (m.type === 'system') {
+    div.className = 'msg system';
+    div.textContent = m.text;
+  } else {
+    div.className = 'msg ' + (m.name === me ? 'me' : 'other');
+    if (m.name !== me) {
+      const nm = document.createElement('div');
+      nm.className = 'msg-username';
+      nm.textContent = m.name;
+      div.appendChild(nm);
+    }
+    const tx = document.createElement('div');
+    tx.className = 'msg-text';
+    tx.textContent = m.text;
+    div.appendChild(tx);
+  }
+  chatLog.appendChild(div);
+  chatLog.scrollTop = chatLog.scrollHeight;
+}
+
+function sendChat() {
+  const t = chatInput.value.trim();
+  if (!t) return;
+  send({type: 'chat', text: t});
+  chatInput.value = '';
+}
+
+// ---------- События ----------
+function tryJoin() {
+  const name = nameInput.value.trim();
+  if (!name) {
+    joinStatus.textContent = 'Введи имя, чтобы играть';
+    joinStatus.classList.add('error-text');
+    nameInput.focus();
+    return;
+  }
+  joinStatus.classList.remove('error-text');
+  joinStatus.textContent = '';
+  localStorage.setItem('chess_name', name);
+  if (ws && ws.readyState === 1) {
+    send({type: 'join', name, room: 'default', roomName: 'Общая комната'});
+  } else {
+    location.reload();
+  }
+}
+$('joinBtn').addEventListener('click', tryJoin);
+nameInput.addEventListener('keydown', e => { if (e.key === 'Enter') tryJoin(); });
+
+$('sendBtn').addEventListener('click', sendChat);
+chatInput.addEventListener('keydown', e => { if (e.key === 'Enter') sendChat(); });
+
+$('leaveBtn').addEventListener('click', () => {
+  sessionStorage.removeItem('chess_room');
+  sessionStorage.removeItem('chess_room_name');
+  inRoom = false;
+  if (ws) { ws.onclose = null; ws.close(); }
+  location.reload();
+});
+$('resetBtn').addEventListener('click', () => send({type: 'reset'}));
+$('goBtn').addEventListener('click', () => send({type: 'reset'}));
+$('createBtn').addEventListener('click', () => {
+  const id = 'room-' + Math.random().toString(36).slice(2, 8);
+  const nm = prompt('Название комнаты:', 'Комната ' + id.slice(-3).toUpperCase());
+  if (nm === null) return;
+  sessionStorage.setItem('chess_room', id);
+  sessionStorage.setItem('chess_room_name', nm || id);
+  if (ws && ws.readyState === 1) {
+    send({type: 'join', name: me || localStorage.getItem('chess_name') || 'Гость', room: id, roomName: nm || id});
+  } else {
+    location.reload();
+  }
+});
+
+function esc(s) {
+  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+if (localStorage.getItem('chess_name')) {
+  nameInput.value = localStorage.getItem('chess_name');
+}
+connect();
+</script>
+</body>
+</html>
