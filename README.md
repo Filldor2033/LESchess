@@ -67,11 +67,17 @@
 - Экран входа <br>
 ![Auth](screenshots/screenshot_redesign_auth.png)
 
+- Комната с доской и чатом <br>
+![Room](screenshots/screenshot_redesign_room.png)
+
 - Партия, мат и оверлей победы <br>
 ![Checkmate](screenshots/screenshot_checkmate.png)
 
-- Комната с доской и чатом <br>
-![Room](screenshots/screenshot_redesign_room.png)
+- Мобильная версия (390px) <br>
+![Mobile](screenshots/mobile_game.png)
+
+- Мат на телефоне <br>
+![Mobile mate](screenshots/mobile_mate.png)
 
 </details>
 
