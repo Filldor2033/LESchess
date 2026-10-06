@@ -2,7 +2,10 @@
 <html lang="ru">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1.0, user-scalable=no">
+<meta name="theme-color" content="#0f172a">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <title>LESchess — шахматы с чатом</title>
 <link rel="icon" type="image/png" sizes="512x512" href="/favicon-512.png">
 <link rel="icon" type="image/png" sizes="192x192" href="/favicon-192.png">
@@ -57,7 +60,7 @@ body {
     display: flex;
     flex-direction: column;
     align-items: center;
-    padding: var(--page-padding);
+    padding: max(var(--page-padding), env(safe-area-inset-top)) max(var(--page-padding), env(safe-area-inset-right)) max(var(--page-padding), env(safe-area-inset-bottom)) max(var(--page-padding), env(safe-area-inset-left));
 }
 
 button, input, select, textarea {
@@ -700,20 +703,116 @@ button:disabled { opacity: 0.6; cursor: not-allowed; transform: none; }
 }
 
 /* ============ Мобилка ============ */
+/* Планшет/телефон в альбомке и узкие десктопы: колонка, доска сверху */
 @media (max-width: 900px) {
-    body { padding: 12px; }
+    :root { --page-padding: 12px; }
 
     .game-area {
         flex-direction: column;
-        align-items: center;
+        align-items: stretch;
         padding: 12px;
+        gap: 12px;
     }
 
     .side { width: 100%; min-width: 0; }
-    .board { width: min(96vw, 480px, calc(100dvh - 320px)); }
+
+    .board-wrap { margin: 0 auto; }
+    .board {
+        width: min(96vw, 480px, calc(100dvh - 320px));
+    }
 
     .header-row { flex-wrap: wrap; }
     .chat-log { min-height: 160px; }
+    .chat { min-height: 220px; }
+}
+
+/* ============ Телефон ============ */
+@media (max-width: 640px) {
+    :root { --page-padding: 10px; --radius-lg: 18px; --radius-md: 14px; --radius-sm: 10px; }
+
+    /* --- Хедер: компактный, кнопки в одну строку с брендом --- */
+    .header { padding: 12px 14px; }
+
+    .brand-logo { width: 34px; height: 34px; border-radius: 9px; }
+    .brand { gap: 10px; }
+    .brand-title { font-size: 15px; }
+    .brand-subtitle { font-size: 11px; }
+
+    .header-row { gap: 8px; }
+    .header-actions { gap: 6px; width: 100%; }
+    .header-actions .small-btn { flex: 1; min-height: 40px; padding: 8px 10px; font-size: 13px; }
+
+    .turn-badge { font-size: 12px; min-height: 20px; }
+
+    /* --- Игровая зона: доска впритык, чат снизу --- */
+    .game-area { padding: 10px; gap: 10px; }
+    .board-wrap { margin: 0; width: 100%; }
+    .board {
+        width: 100%;
+        max-width: min(100%, calc(100dvh - 250px));
+        border-radius: var(--radius-md);
+    }
+
+    /* --- Игроки: две строки, крупные тапабельные ряды --- */
+    .section-block { padding: 10px; border-radius: var(--radius-sm); }
+    .section-title { font-size: 11px; margin-bottom: 8px; }
+    .player-row { padding: 8px; gap: 8px; min-height: 52px; }
+    .player-avatar { width: 34px; height: 34px; font-size: 14px; }
+    .player-name { font-size: 14px; }
+    .player-badge { font-size: 10px; padding: 4px 7px; }
+
+    .side { gap: 10px; }
+
+    /* --- Чат: тянется до низа экрана, композер не прыгает при клавиатуре --- */
+    .chat { min-height: 0; flex: 1; }
+    .chat .section { padding: 10px 12px 0 12px; }
+    .chat-log {
+        min-height: 180px;
+        max-height: 42dvh;
+        padding: 10px;
+        gap: 8px;
+    }
+    .msg { padding: 10px 12px; border-radius: 15px; max-width: 86%; }
+    .msg-username { font-size: 11px; }
+    .composer { padding: 10px; }
+    .input-row button { width: 48px; min-width: 48px; }
+    .input-row button svg { width: 20px; height: 20px; }
+
+    /* --- Auth/лобби: на весь экран без прокрутки на клавиатуре --- */
+    #authWrap, #lobbyWrap { margin: 0; }
+    .section { padding: 14px; }
+
+    .room-item { padding: 11px; border-radius: var(--radius-sm); }
+    .room-title { font-size: 14px; }
+    .room-meta { font-size: 11px; margin: 5px 0 8px; }
+
+    /* --- Gameover: компактнее --- */
+    .go-inner .go-title { font-size: 20px; }
+    .go-inner .go-sub { font-size: 12px; }
+    .go-inner button { width: 100%; }
+
+    /* --- Координаты доски мельче --- */
+    .coord { font-size: 9px; }
+    .coord.file { bottom: 1px; right: 2px; }
+    .coord.rank { top: 1px; left: 2px; }
+}
+
+/* ============ Очень узкие телефоны (iPhone SE и меньше) ============ */
+@media (max-width: 380px) {
+    :root { --page-padding: 8px; }
+    .brand-logo { width: 30px; height: 30px; }
+    .brand-title { font-size: 14px; }
+    .game-area { padding: 8px; gap: 8px; }
+    .header-actions .small-btn { font-size: 12px; padding: 7px 8px; }
+    .chat-log { max-height: 46dvh; }
+}
+
+/* ============ Мобильная клавиатура: сжимаем раскладку, чат остаётся видимым ============ */
+@media (max-width: 640px) and (max-height: 500px) {
+    .board { max-width: min(100%, 52dvh); }
+    .chat-log { min-height: 120px; max-height: 30dvh; }
+    .players-box { flex-direction: row; }
+    .player-row { flex: 1; min-height: 46px; }
 }
 
 @media (prefers-reduced-motion: reduce) {
