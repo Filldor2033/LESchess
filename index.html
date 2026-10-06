@@ -1208,10 +1208,13 @@ function attachPieceDrag(cell, x, y) {
     const p = state.board[y][x];
     if (!p || p[0] !== myColor || p[0] !== state.turn) return;
 
-    e.preventDefault();
     try { piece.setPointerCapture(e.pointerId); } catch (err) { /* синтетические события — ок */ }
     const r0 = piece.getBoundingClientRect();
     const startX = e.clientX, startY = e.clientY;
+    // порог драга: для пальца — половина клетки (тап никогда не считается драгом),
+    // для мыши — 8% (лёгкое шевеление при клике)
+    const isTouch = e.pointerType === 'touch';
+    const armLen = isTouch ? Math.max(r0.width * 0.5, 24) : Math.max(r0.width, 30) * 0.08;
 
     // выбираем фигуру БЕЗ перерендера (иначе потеряем pointer-capture):
     // подсветки вешаем на живые клетки классами
@@ -1227,24 +1230,25 @@ function attachPieceDrag(cell, x, y) {
       hintsPending = true;
     }
 
-    // ghost — плавающая копия фигуры под пальцем/курсором
-    const ghost = piece.cloneNode(true);
-    ghost.classList.add('drag-ghost');
-    ghost.style.width = r0.width + 'px';
-    ghost.style.height = r0.height + 'px';
-    document.body.appendChild(ghost);
-    drag = {fromX: x, fromY: y, ghost, moved: false, pointerId: e.pointerId, hintsPending,
-            startX, startY, armLen: Math.max(r0.width, 30) * 0.08};
-    positionGhost(e);
+    // ghost создаётся лениво в pointermove, когда драг реально начался
+    drag = {fromX: x, fromY: y, ghost: null, piece, r0, moved: false, pointerId: e.pointerId,
+            hintsPending, startX, startY, armLen};
   });
 
   piece.addEventListener('pointermove', e => {
     if (!drag || drag.pointerId !== e.pointerId) return;
     if (!drag.moved) {
-      // порог: до ~8% клетки это тап/клик, не драг — click-хендлер сам разберётся
       const dist = Math.hypot(e.clientX - drag.startX, e.clientY - drag.startY);
       if (dist < drag.armLen) return;
       drag.moved = true;
+      if (!drag.ghost) {
+        const ghost = drag.piece.cloneNode(true);
+        ghost.classList.add('drag-ghost');
+        ghost.style.width = drag.r0.width + 'px';
+        ghost.style.height = drag.r0.height + 'px';
+        document.body.appendChild(ghost);
+        drag.ghost = ghost;
+      }
     }
     positionGhost(e);
     highlightDropCell(e);
@@ -1255,7 +1259,7 @@ function attachPieceDrag(cell, x, y) {
     const d = drag;
     const pending = d.hintsPending;   // подсказки ещё не пришли с сервера
     drag = null;
-    d.ghost.remove();
+    if (d.ghost) d.ghost.remove();
     clearDropHighlight();
     if (!d.moved) return;                      // это был клик — click-хендлер сам разберётся
     const cell2 = cellFromPoint(e.clientX, e.clientY);
