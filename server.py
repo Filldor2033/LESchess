@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """LESchess — локальные веб-шахматы с чатом и комнатами. Один файл + python-chess."""
-import asyncio, json, time
+import asyncio, json, time, secrets
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 import websockets
 import chess
@@ -76,14 +76,26 @@ class Game:
 
 # ---------------- Комнаты и WS ----------------
 
-ROOMS = {}      # room_id -> {'id','name','created','game','clients':{ws:name},'chat':[],'players':{...}}
+ROOMS = {}      # room_id -> {'id','name','password','created','game','clients':{ws:name},'chat':[],'players':{...}}
+LOBBY = set()   # соединения, смотрящие список комнат (ещё не в комнате)
 CONNS = set()
 
 def now(): return int(time.time())
 
 def room_public(r):
     return {'id': r['id'], 'name': r['name'], 'players': len(r['clients']),
-            'status': r['game'].status(), 'created': r['created']}
+            'status': r['game'].status(), 'created': r['created'],
+            'locked': bool(r.get('password'))}
+
+def notify_lobby():
+    """Сообщить лобби обновлённый список комнат (неблокирующе)."""
+    obj = json.dumps({'type': 'rooms', 'rooms': [room_public(r) for r in ROOMS.values()]},
+                     ensure_ascii=False)
+    for ws in list(LOBBY):
+        try:
+            asyncio.ensure_future(ws.send(obj))
+        except Exception:
+            LOBBY.discard(ws)
 
 async def broadcast(r, obj, exclude=None):
     dead = []
@@ -103,11 +115,31 @@ def leave_room(r, ws):
     broadcast_sync(r, {'type': 'system', 'text': f'{name} покинул комнату'})
     broadcast_sync(r, {'type': 'room', 'room': room_public(r)})
     broadcast_sync(r, {'type': 'players', 'players': r['players']})
-    if not r['clients'] and len(ROOMS) > 1:
-        ROOMS.pop(r['id'], None)
+    if not r['clients']:
+        ROOMS.pop(r['id'], None)   # пустая комната удаляется
+    notify_lobby()
 
 def broadcast_sync(r, obj):
     asyncio.ensure_future(broadcast(r, obj))
+
+async def enter_room(ws, r, name):
+    """Поместить соединение в комнату: дедуп имени, цвет, welcome, нотификации."""
+    n = 1
+    base = name
+    while name in r['clients'].values():
+        n += 1; name = f'{base} {n}'
+    r['clients'][ws] = name
+    if r['players']['w'] is None: r['players']['w'] = name
+    elif r['players']['b'] is None: r['players']['b'] = name
+    LOBBY.discard(ws)
+    await ws.send(json.dumps({'type': 'welcome', 'name': name, 'color': 'w' if r['players']['w']==name else 'b',
+                              'room': room_public(r), 'state': r['game'].state(),
+                              'players': r['players'], 'chat': r['chat'][-60:]}, ensure_ascii=False))
+    await broadcast(r, {'type': 'system', 'text': f'{name} присоединился'}, exclude=ws)
+    broadcast_sync(r, {'type': 'room', 'room': room_public(r)})
+    broadcast_sync(r, {'type': 'players', 'players': r['players']})
+    notify_lobby()
+    return name
 
 async def handler(ws):
     name = None
@@ -120,32 +152,46 @@ async def handler(ws):
                 continue
             t = msg.get('type')
             if t == 'join':
+                if room: continue
                 name = (msg.get('name') or 'Гость').strip()[:20] or 'Гость'
-                room_id = msg.get('room')
+                room_id = msg.get('room') or ('r-' + secrets.token_hex(4))
+                password = (msg.get('password') or '').strip()[:40]
                 r = ROOMS.get(room_id)
                 if not r:
-                    # создать если не существует
-                    r = {'id': room_id, 'name': msg.get('roomName') or room_id, 'created': now(),
+                    # создать, если не существует (reconnect или прямой вход)
+                    r = {'id': room_id, 'name': (msg.get('roomName') or room_id).strip()[:40] or room_id,
+                         'password': password, 'created': now(),
                          'game': Game(), 'clients': {}, 'chat': [], 'players': {'w': None, 'b': None}}
                     ROOMS[room_id] = r
+                elif r.get('password') and r['password'] != password:
+                    await ws.send(json.dumps({'type': 'error', 'text': 'Неверный пароль комнаты'}, ensure_ascii=False))
+                    continue
                 room = r
                 if len(r['clients']) >= 2:
-                    await ws.send(json.dumps({'type': 'error', 'text': 'Комната заполнена (макс. 2 игрока)'}))
+                    await ws.send(json.dumps({'type': 'error', 'text': 'Комната заполнена (макс. 2 игрока)'}, ensure_ascii=False))
+                    room = None
                     continue
-                n = 1
-                base = name
-                while name in r['clients'].values():
-                    n += 1; name = f'{base} {n}'
-                r['clients'][ws] = name
-                # назначение цвета
-                if r['players']['w'] is None: r['players']['w'] = name
-                elif r['players']['b'] is None: r['players']['b'] = name
-                await ws.send(json.dumps({'type': 'welcome', 'name': name, 'color': 'w' if r['players']['w']==name else 'b',
-                                          'room': room_public(r), 'state': r['game'].state(),
-                                          'players': r['players'], 'chat': r['chat'][-60:]}, ensure_ascii=False))
-                await broadcast(r, {'type': 'system', 'text': f'{name} присоединился'}, exclude=ws)
-                broadcast_sync(r, {'type': 'room', 'room': room_public(r)})
-                broadcast_sync(r, {'type': 'players', 'players': r['players']})
+                name = await enter_room(ws, r, name)
+            elif t == 'create' and not room:
+                # создать комнату со своим названием и паролем
+                rname = (msg.get('name') or '').strip()[:40]
+                password = (msg.get('password') or '').strip()[:40]
+                if not rname:
+                    await ws.send(json.dumps({'type': 'error', 'text': 'Придумай название комнаты'}, ensure_ascii=False))
+                    continue
+                name = (msg.get('playerName') or localStorage_name(msg) or 'Гость')
+                name = (name or 'Гость').strip()[:20] or 'Гость'
+                room_id = 'r-' + secrets.token_hex(4)
+                r = {'id': room_id, 'name': rname, 'password': password, 'created': now(),
+                     'game': Game(), 'clients': {}, 'chat': [], 'players': {'w': None, 'b': None}}
+                ROOMS[room_id] = r
+                room = r
+                name = await enter_room(ws, r, name)
+            elif t == 'list' and not room:
+                # подписка на список комнат (лобби)
+                LOBBY.add(ws)
+                await ws.send(json.dumps({'type': 'rooms', 'rooms': [room_public(r) for r in ROOMS.values()]},
+                                         ensure_ascii=False))
             elif t == 'chat' and room:
                 text = (msg.get('text') or '').strip()[:500]
                 if not text: continue
@@ -169,6 +215,8 @@ async def handler(ws):
                 res = g.apply_move(sx, sy, tx, ty)
                 await broadcast(room, {'type': 'move', 'from': [sx, sy], 'to': [tx, ty],
                                        'piece': res['captured'] and None, 'state': g.state()})
+                if g.status() != 'active':
+                    notify_lobby()   # комната «в игре» -> «свободна/окончена» в лобби
             elif t == 'reset' and room:
                 if not room['players'].get('w') or not room['players'].get('b'):
                     await ws.send(json.dumps({'type': 'error', 'text': 'Ждём второго игрока'}, ensure_ascii=False))
@@ -176,14 +224,19 @@ async def handler(ws):
                 room['game'] = Game()
                 await broadcast(room, {'type': 'system', 'text': 'Новая партия', 'state': room['game'].state()})
                 broadcast_sync(room, {'type': 'players', 'players': room['players']})
+                notify_lobby()
             elif t == 'moves' and room:
                 mv = room['game'].legal_moves(msg['x'], msg['y'])
                 await ws.send(json.dumps({'type': 'moves', 'x': msg['x'], 'y': msg['y'], 'moves': [list(m) for m in mv]}))
     except Exception:
         pass
     finally:
+        LOBBY.discard(ws)
         if room:
             leave_room(room, ws)
+
+def localStorage_name(msg):
+    return msg.get('playerName') or msg.get('name') or 'Гость'
 
 async def ws_server():
     async with websockets.serve(handler, '0.0.0.0', 8091, ping_interval=20):
