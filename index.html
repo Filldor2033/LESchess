@@ -1194,6 +1194,7 @@ function renderBoard() {
 
 // ---------- Drag-and-drop фигур ----------
 let drag = null;   // {fromX, fromY, ghost, moved}
+let suppressClickToggle = false;  // выбор сделан pointerdown ТЕКУЩЕГО жеста — click не должен его снимать
 
 function attachPieceDrag(cell, x, y) {
   const piece = cell.querySelector('.piece');
@@ -1218,7 +1219,8 @@ function attachPieceDrag(cell, x, y) {
 
     // выбираем фигуру БЕЗ перерендера (иначе потеряем pointer-capture):
     // подсветки вешаем на живые клетки классами
-    if (!sel || sel[0] !== x || sel[1] !== y) {
+    suppressClickToggle = (!sel || sel[0] !== x || sel[1] !== y);
+    if (suppressClickToggle) {
       sel = [x, y];
       hints = [];
       boardEl.querySelectorAll('.cell.sel').forEach(c => c.classList.remove('sel'));
@@ -1308,14 +1310,9 @@ function clearDropHighlight() {
 function onCellClick(x, y) {
   if (!state || state.status !== 'active') return;
   const p = state.board[y][x];
-  if (sel && (hintsPending || hints.some(h => h[0] === x && h[1] === y))) {
-    // hints могут ещё не прийти (RTT) — отправляем optimistic, сервер валидирует
-    send({type: 'move', from: sel, to: [x, y]});
-    hintsPending = false;
-    return;
-  }
   if (p && p[0] === myColor && p[0] === state.turn) {
     if (sel && sel[0] === x && sel[1] === y) {
+      if (suppressClickToggle) { suppressClickToggle = false; return; }
       sel = null; hints = [];
       renderBoard();
       return;
@@ -1325,6 +1322,13 @@ function onCellClick(x, y) {
     renderBoard();
     hintsPending = true;
     send({type: 'moves', x, y});
+    return;
+  }
+  if (sel && (hintsPending || hints.some(h => h[0] === x && h[1] === y))) {
+    if (sel[0] === x && sel[1] === y) return;   // ход в ту же клетку — не шлём на сервер
+    // hints могут ещё не прийти (RTT) — отправляем optimistic, сервер валидирует
+    send({type: 'move', from: sel, to: [x, y]});
+    hintsPending = false;
     return;
   }
   sel = null; hints = [];
