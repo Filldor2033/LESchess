@@ -1,168 +1,76 @@
 #!/usr/bin/env python3
-"""LESchess — локальные веб-шахматы с чатом и комнатами. Один файл, без зависимостей."""
+"""LESchess — локальные веб-шахматы с чатом и комнатами. Один файл + python-chess."""
 import asyncio, json, time
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 import websockets
+import chess
 
-def new_board():
-    return [
-        ['bR','bN','bB','bQ','bK','bB','bN','bR'],
-        ['bP']*8, [None]*8, [None]*8, [None]*8, [None]*8,
-        ['wP']*8,
-        ['wR','wN','wB','wQ','wK','wB','wN','wR'],
-    ]
+PIECE_VAL = {'K': 0, 'Q': 9, 'R': 5, 'B': 3, 'N': 3, 'P': 1}
 
-PIECE_VAL = {'K':0,'Q':9,'R':5,'B':3,'N':3,'P':1}
-
+# python-chess: rank 0 = 1-я горизонталь. Наш UI: y=0 сверху = 8-я горизонталь.
+# перевод: rank = 7 - y, file = x
 class Game:
     def __init__(self):
-        self.board = new_board()
-        self.turn = 'w'
-        self.history = []
+        self.b = chess.Board()
         self.moves = 0
-        self.status = 'active'
-        self.result = None
-
-    def clone(self):
-        g = Game()
-        g.board = [r[:] for r in self.board]
-        g.turn = self.turn
-        g.moves = self.moves
-        return g
 
     def piece(self, x, y):
-        return self.board[y][x]
+        p = self.b.piece_at(chess.square(x, 7 - y))
+        if p is None: return None
+        return ('w' if p.color == chess.WHITE else 'b') + p.symbol().upper()
 
-    def find_king(self, color):
-        for y in range(8):
-            for x in range(8):
-                p = self.board[y][x]
-                if p == color + 'K':
-                    return (x, y)
-        return None
-
-    def pseudo_moves(self, x, y, for_attack=False):
-        p = self.piece(x, y)
-        if not p: return []
-        color, kind = p[0], p[1]
-        moves = []
-        D = [(1,0),(-1,0),(0,1),(0,-1)]
-        DD = [(1,1),(1,-1),(-1,1),(-1,-1)]
-        N = [(1,2),(2,1),(2,-1),(1,-2),(-1,-2),(-2,-1),(-2,1),(-1,2)]
-        def inside(x, y): return 0 <= x < 8 and 0 <= y < 8
-        def add(tx, ty):
-            t = self.piece(tx, ty)
-            if t is None:
-                moves.append((tx, ty))
-                return True
-            if t[0] != color:
-                moves.append((tx, ty))
-            return False
-        if kind == 'P':
-            dirn = -1 if color == 'w' else 1
-            start = 6 if color == 'w' else 1
-            if for_attack:
-                for dx in (-1, 1):
-                    tx, ty = x+dx, y+dirn
-                    if inside(tx, ty): moves.append((tx, ty))
-            else:
-                if inside(x, y+dirn) and self.piece(x, y+dirn) is None:
-                    moves.append((x, y+dirn))
-                    if y == start and self.piece(x, y+2*dirn) is None:
-                        moves.append((x, y+2*dirn))
-                for dx in (-1, 1):
-                    tx, ty = x+dx, y+dirn
-                    if inside(tx, ty):
-                        t = self.piece(tx, ty)
-                        if t is not None and t[0] != color:
-                            moves.append((tx, ty))
-        elif kind == 'N':
-            for dx, dy in N:
-                tx, ty = x+dx, y+dy
-                if inside(tx, ty): add(tx, ty)
-        elif kind == 'K':
-            for dx, dy in D + DD:
-                tx, ty = x+dx, y+dy
-                if inside(tx, ty): add(tx, ty)
-        else:
-            dirs = D if kind == 'R' else DD if kind == 'B' else D + DD
-            for dx, dy in dirs:
-                tx, ty = x+dx, y+dy
-                while inside(tx, ty):
-                    if not add(tx, ty): break
-                    tx, ty = tx+dx, ty+dy
-        return moves
-
-    def in_check(self, color):
-        k = self.find_king(color)
-        if not k: return True
-        kx, ky = k
-        opp = 'b' if color == 'w' else 'w'
-        for y in range(8):
-            for x in range(8):
-                if self.piece(x, y) and self.piece(x, y)[0] == opp:
-                    if (kx, ky) in self.pseudo_moves(x, y, for_attack=True):
-                        return True
-        return False
+    def board_grid(self):
+        return [[self.piece(x, y) for x in range(8)] for y in range(8)]
 
     def legal_moves(self, x, y):
-        p = self.piece(x, y)
-        if not p or self.status != 'active': return []
-        if p[0] != self.turn: return []
-        res = []
-        for tx, ty in self.pseudo_moves(x, y):
-            g2 = self.clone()
-            g2.board[ty][tx] = g2.board[y][x]
-            g2.board[y][x] = None
-            # пешка дошла до края — повышаем для корректности проверки шаха (фигурка не важна)
-            if not g2.in_check(p[0]):
-                res.append((tx, ty))
-        return res
-
-    def has_any_move(self, color):
-        for y in range(8):
-            for x in range(8):
-                p = self.piece(x, y)
-                if p and p[0] == color:
-                    if self.legal_moves(x, y):
-                        return True
-        return False
+        sq = chess.square(x, 7 - y)
+        if self.b.piece_at(sq) is None: return []
+        return [(chess.square_file(mv.to_square), 7 - chess.square_rank(mv.to_square))
+                for mv in self.b.legal_moves if mv.from_square == sq]
 
     def apply_move(self, sx, sy, tx, ty):
-        p = self.piece(sx, sy)
+        mv = chess.Move(chess.square(sx, 7 - sy), chess.square(tx, 7 - ty))
+        if mv not in self.b.legal_moves: return None
         captured = self.piece(tx, ty)
-        self.board[ty][tx] = p
-        self.board[sy][sx] = None
-        # превращение пешки
-        if p[1] == 'P' and ty in (0, 7):
-            self.board[ty][tx] = p[0] + 'Q'
-        self.turn = 'w' if self.turn == 'b' else 'b'
+        self.b.push(mv)
         self.moves += 1
-        self.history.append({'from': [sx, sy], 'to': [tx, ty], 'piece': p, 'captured': captured})
-        # проверка конца игры
-        opp = self.turn
-        if not self.has_any_move(opp):
-            if self.in_check(opp):
-                self.status = 'checkmate'
-                self.result = 'w' if opp == 'b' else 'b'
-            else:
-                self.status = 'stalemate'
-                self.result = 'draw'
         return {'captured': captured}
+
+    def status(self):
+        if self.b.is_checkmate(): return 'checkmate'
+        if self.b.is_stalemate(): return 'stalemate'
+        if self.b.is_insufficient_material(): return 'draw'
+        if self.b.is_fifty_moves(): return 'draw'
+        if self.b.is_repetition(3): return 'draw'
+        return 'active'
+
+    def result(self):
+        if self.b.is_checkmate():
+            return 'w' if self.b.turn == chess.BLACK else 'b'
+        return 'draw'
+
+    def in_check(self):
+        return self.b.is_check()
+
+    def turn_color(self):
+        return 'w' if self.b.turn == chess.WHITE else 'b'
 
     def material(self):
         d = 0
-        for row in self.board:
-            for p in row:
-                if p:
-                    v = PIECE_VAL[p[1]]
-                    d += v if p[0] == 'w' else -v
+        for sq in chess.SQUARES:
+            p = self.b.piece_at(sq)
+            if p:
+                v = PIECE_VAL[p.symbol().upper()]
+                d += v if p.color == chess.WHITE else -v
         return d
 
     def state(self):
-        return {'board': self.board, 'turn': self.turn, 'status': self.status,
-                'result': self.result, 'moves': self.moves,
-                'inCheck': self.in_check(self.turn) if self.status == 'active' else False,
+        st = self.status()
+        return {'board': self.board_grid(), 'turn': self.turn_color(),
+                'status': st,
+                'result': self.result() if st in ('checkmate', 'stalemate', 'draw') else None,
+                'moves': self.moves,
+                'inCheck': self.b.is_check() if st == 'active' else False,
                 'material': self.material()}
 
 
@@ -175,7 +83,7 @@ def now(): return int(time.time())
 
 def room_public(r):
     return {'id': r['id'], 'name': r['name'], 'players': len(r['clients']),
-            'status': r['game'].status, 'created': r['created']}
+            'status': r['game'].status(), 'created': r['created']}
 
 async def broadcast(r, obj, exclude=None):
     dead = []
@@ -248,7 +156,7 @@ async def handler(ws):
             elif t == 'move' and room:
                 g = room['game']
                 mycolor = 'w' if room['players'].get('w') == name else 'b'
-                if g.status != 'active' or g.turn != mycolor:
+                if g.status() != 'active' or g.turn_color() != mycolor:
                     await ws.send(json.dumps({'type': 'error', 'text': 'Не ваш ход'}))
                     continue
                 try:

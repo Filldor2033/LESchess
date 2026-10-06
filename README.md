@@ -8,7 +8,7 @@
 
 [![Python](https://img.shields.io/badge/Python-3.10+-3776AB?style=for-the-badge&logo=python&logoColor=white)](https://www.python.org/)
 [![WebSocket](https://img.shields.io/badge/WebSocket-Real--time-010101?style=for-the-badge&logo=socket.io&logoColor=white)](https://developer.mozilla.org/en-US/docs/Web/API/WebSocket)
-[![Zero Dependencies](https://img.shields.io/badge/Backend-Zero--dependency-22c55e?style=for-the-badge)](https://pypi.org/project/websockets/)
+[![Engine: python-chess](https://img.shields.io/badge/Backend-WebSockets_·_python--chess-22c55e?style=for-the-badge)](https://pypi.org/project/chess/)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue?style=for-the-badge&logo=gnu&logoColor=white)](https://www.gnu.org/licenses/gpl-3.0)
 [![Tests](https://img.shields.io/badge/Tests-pytest-0A9EDC?style=for-the-badge&logo=pytest&logoColor=white)](https://pytest.org/)
 
@@ -32,7 +32,7 @@
 
 ## 📖 Описание проекта
 
-**LESchess** — локальные веб-шахматы для игры вдвоём в браузере. Один Python-файл бэкенда без внешних сервисов и базы данных: комнаты, полная валидация правил, чат в реальном времени и интерфейс в фирменном стиле LESogram.
+**LESchess** — локальные веб-шахматы для игры вдвоём в браузере. Один Python-файл бэкенда (движок — [python-chess](https://pypi.org/project/chess/)) без внешних сервисов и базы данных: комнаты, полная валидация правил, чат в реальном времени и интерфейс в фирменном стиле LESogram.
 
 ### 🎯 Цели проекта
 
@@ -45,7 +45,8 @@
 
 ## ✨ Возможности
 
-- ♟️ **Полные правила шахмат**: валидация ходов на сервере, шах, мат, пат, превращение пешек
+- ♟️ **Полные правила шахмат** (python-chess): валидация на сервере, рокировки, взятие на проходе, шах, мат, пат, превращение пешек, ничьи (3-кратное повторение, 50 ходов, недостаток материала)
+- ✋ **Drag-and-drop** — фигуры можно переставлять перетаскиванием (мышь и тач) или кликом, с подсветкой допустимых клеток и «призраком» фигуры под пальцем
 - 🏠 **Отдельные комнаты** — до 2 игроков в каждой, «Общая комната» + создание своих
 - 💬 **Чат игроков** — пузыри в стиле LESogram, системные сообщения о входе/выходе
 - 🎨 **Фирменный дизайн** — тёмная тема `#0f172a` + зелёный акцент `#22c55e`, Trebuchet MS, радиусы 22/16/12, стеклянные панели с blur
@@ -92,7 +93,7 @@ cd LESchess
 python -m venv .venv
 source .venv/bin/activate        # Windows: .venv\Scripts\activate
 
-pip install websockets
+pip install websockets chess
 ```
 
 ### ▶️ Запуск
@@ -161,7 +162,7 @@ LESchess/
 ├── server.py           # Весь бэкенд: HTTP-статика + WS + правила шахмат
 ├── index.html          # Весь фронтенд: интерфейс, доска, чат
 ├── e2e_test.py         # E2E-тесты (pytest-совместимый сценарий)
-├── requirements.txt    # websockets + pytest
+├── requirements.txt    # websockets + chess + pytest
 ├── logo.png            # Логотип (король и ёлки)
 ├── favicon-*.png       # Фавиконы 512/192/48/32/16
 ├── apple-touch-icon.png
