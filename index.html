@@ -348,6 +348,38 @@ button:disabled { opacity: 0.6; cursor: not-allowed; transform: none; }
 .modal button { margin-top: 6px; }
 .modal button + button { margin-top: 10px; }
 
+/* ход, заготовленный наперёд */
+.cell.premove-from {
+  outline: 3px dashed rgba(34, 197, 94, 0.9);
+  outline-offset: -3px;
+}
+.cell.premove-to {
+  outline: 3px solid rgba(34, 197, 94, 0.9);
+  outline-offset: -3px;
+  box-shadow: inset 0 0 0 100px rgba(34, 197, 94, 0.22);
+}
+
+/* история ходов (SAN) */
+.moves-panel {
+    flex-shrink: 0;
+    max-height: 130px;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding: 6px 12px 8px;
+    font-variant-numeric: tabular-nums;
+}
+.moves-row {
+    display: grid;
+    grid-template-columns: 30px 1fr 1fr;
+    gap: 4px;
+    font-size: 12.5px;
+    color: var(--muted-2);
+    line-height: 1.7;
+}
+.moves-row .no { color: var(--muted); }
+.moves-row .san { color: #e2e8f0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.moves-row .san.current { color: var(--accent); font-weight: bold; }
+
 /* ============ Кнопки партии (отмена хода / ничья / сдаться) ============ */
 .game-actions {
     display: flex;
@@ -1100,6 +1132,10 @@ button:disabled { opacity: 0.6; cursor: not-allowed; transform: none; }
 
             <div class="glass-panel chat" style="flex:1;min-height:0">
                 <div class="section" style="padding:14px 18px 0 18px;flex-shrink:0">
+                    <div class="section-title">Ходы</div>
+                </div>
+                <div class="moves-panel" id="movesPanel"><div class="moves-row"><span class="no">—</span><span class="san" style="color:var(--muted)">ходов ещё нет</span></div></div>
+                <div class="section" style="padding:8px 18px 0 18px;flex-shrink:0">
                     <div class="section-title">Чат комнаты</div>
                 </div>
                 <div class="chat-log" id="chatLog"></div>
@@ -1155,6 +1191,7 @@ let rooms = [];            // список комнат в лобби
 let pendingRoom = null;    // комната, в которую пытаемся войти (ждём пароль)
 let clockTimer = null;     // setInterval локального тика таймера
 let clockEnds = null;      // unix ms, когда истекает время текущего хода
+let myPremove = null;      // {from, to} — мой заготовленный ход (отображение)
 let players = {w: null, b: null};
 let sel = null;
 let hints = [];
@@ -1252,6 +1289,7 @@ function handleMessage(m) {
       clockEnds = null;
       lastRenderedMoveNo = -1;
       renderEpoch = 0;
+      myPremove = null;
       sessionStorage.setItem('chess_room', m.room.id);
       sessionStorage.setItem('chess_room_name', m.room.name);
       localStorage.setItem('chess_name', me);
@@ -1278,6 +1316,13 @@ function handleMessage(m) {
       lastMove = {from: m.from, to: m.to};
       state = m.state;
       sel = null; hints = [];
+      // мой заготовленный ход либо применился (m.premoved), либо позиция
+      // изменилась — отрисовку premove снимаем
+      if (myPremove && m.premoved) {
+        myPremove = null;   // сработал — подсветку убрать
+      } else if (myPremove) {
+        myPremove = myPremove.to ? null : {from: myPremove.from, to: null};
+      }
       queueRender(renderRoom);
       restartClock();
       // ход сделан — открытую time-модалку закрываем (менять уже нельзя)
@@ -1347,6 +1392,15 @@ function handleMessage(m) {
         }
       }
       break;
+    case 'premove':
+      if (m.cleared) { clearPremove(true); break; }
+      if (m.ok === false) {
+        // заготовленный ход невозможен / отклонён — сбрасываем выбор
+        clearPremove(true);
+        flashError(m.text || 'Ход наперёд отклонён');
+      }
+      // ok === true — подтверждение сохранения: подсветка уже нарисована
+      break;
     case 'request':
       // соперник предлагает: отмена хода / ничья — показать запрос
       if (m.from === me) return;   // своё предложение — ждём ответ
@@ -1409,6 +1463,7 @@ function renderRoom() {
   renderPlayers();
   renderBadge();
   renderGameover();
+  renderMoves();
   // время меняется только до первого хода
   const timeBtn = $('timeBtn');
   if (timeBtn) timeBtn.disabled = !!(state && state.moves > 0);
@@ -1450,6 +1505,29 @@ function renderBadge() {
   const clock = clockHtml();
   badge.className = 'turn-badge' + (my ? ' yourturn' : '');
   badge.innerHTML = '<div class="dot ' + (state.turn === 'b' ? 'black' : '') + '"></div>' + (my ? 'Твой ход' : who) + check + clock;
+}
+
+// ---------- История ходов (SAN) ----------
+function renderMoves() {
+  const panel = $('movesPanel');
+  if (!panel || !state) return;
+  const sans = state.san || [];
+  if (!sans.length) {
+    panel.innerHTML = '<div class="moves-row"><span class="no">—</span><span class="san" style="color:var(--muted)">ходов ещё нет</span></div>';
+    return;
+  }
+  let html = '';
+  const lastIdx = sans.length - 1;
+  sans.forEach((pair, i) => {
+    const cur = i === lastIdx;
+    html += '<div class="moves-row">' +
+      '<span class="no">' + (i + 1) + '.</span>' +
+      '<span class="san' + (cur ? ' current' : '') + '">' + esc(pair[0] || '') + '</span>' +
+      '<span class="san' + (cur && pair[1] ? ' current' : '') + '">' + esc(pair[1] || '') + '</span>' +
+      '</div>';
+  });
+  panel.innerHTML = html;
+  panel.scrollTop = panel.scrollHeight;
 }
 
 // ---------- Часы на ход ----------
@@ -1551,6 +1629,7 @@ function renderBoard() {
       boardEl.appendChild(cell);
     }
   }
+  drawPremove();   // подсветка заготовленного хода поверх новой доски
 }
 
 // ---------- Drag-and-drop фигур ----------
@@ -1671,6 +1750,29 @@ function clearDropHighlight() {
 function onCellClick(x, y) {
   if (!state || state.status !== 'active') return;
   const p = state.board[y][x];
+  // своя фигура, но НЕ свой ход → ход наперёд (premove)
+  if (p && p[0] === myColor && p[0] !== state.turn) {
+    if (myPremove && myPremove.from[0] === x && myPremove.from[1] === y) return; // повторный клик
+    myPremove = {from: [x, y], to: null};
+    drawPremove();
+    return;
+  }
+  // выбрана фигура для premove: клик по цели — заготовить ход
+  if (myPremove && myPremove.to === null) {
+    const isPromo = state.board[myPremove.from[1]][myPremove.from[0]][1] === 'P' && (y === 0 || y === 7);
+    const sendPremove = (promote) => {
+      send({type: 'premove', from: myPremove.from, to: [x, y], promote: promote || undefined});
+      myPremove.to = [x, y];
+      drawPremove();
+    };
+    if (isPromoMoveLocal(myPremove.from, [x, y])) {
+      pendingPromoMove = {premove: true, from: myPremove.from.slice(), to: [x, y]};
+      $('promoModal').style.display = 'flex';
+      return;
+    }
+    sendPremove();
+    return;
+  }
   if (p && p[0] === myColor && p[0] === state.turn) {
     if (sel && sel[0] === x && sel[1] === y) {
       if (suppressClickToggle) { suppressClickToggle = false; return; }
@@ -1842,6 +1944,33 @@ function showIncomingRequest(m) {
   $('confirmModal').addEventListener('click', e => { if (e.target === $('confirmModal')) cancel(); }, {once: true});
 }
 
+// ---------- Ход наперёд (premove): отрисовка ----------
+function isPromoMoveLocal(from, to) {
+  if (!state) return false;
+  const p = state.board[from[1]][from[0]];
+  if (!p || p[1] !== 'P') return false;
+  return to[1] === 0 || to[1] === 7;
+}
+
+function drawPremove() {
+  boardEl.querySelectorAll('.premove-from, .premove-to').forEach(c => c.classList.remove('premove-from', 'premove-to'));
+  if (!myPremove) return;
+  const c1 = boardEl.querySelector('.cell[data-x="' + myPremove.from[0] + '"][data-y="' + myPremove.from[1] + '"]');
+  if (c1) c1.classList.add('premove-from');
+  if (myPremove.to) {
+    const c2 = boardEl.querySelector('.cell[data-x="' + myPremove.to[0] + '"][data-y="' + myPremove.to[1] + '"]');
+    if (c2) c2.classList.add('premove-to');
+  }
+}
+
+function clearPremove(keepServer) {
+  if (myPremove && myPremove.to && !keepServer) {
+    send({type: 'premove', clear: true});
+  }
+  myPremove = null;
+  drawPremove();
+}
+
 // ---------- Превращение пешки ----------
 let pendingPromoMove = null;   // {from, to} — ждём выбора фигуры
 const PROMO = {Q: 'Q', R: 'R', B: 'B', N: 'N'};
@@ -1864,10 +1993,16 @@ function trySendMove(from, to) {
 
 function sendPromo(kind) {
   if (!pendingPromoMove) { $('promoModal').style.display = 'none'; return; }
-  const {from, to} = pendingPromoMove;
+  const {from, to, premove} = pendingPromoMove;
   pendingPromoMove = null;
   $('promoModal').style.display = 'none';
-  send({type: 'move', from, to, promote: kind});
+  if (premove) {
+    send({type: 'premove', from, to, promote: kind});
+    myPremove = {from: from.slice(), to: to.slice()};
+    drawPremove();
+  } else {
+    send({type: 'move', from, to, promote: kind});
+  }
 }
 ['Q', 'R', 'B', 'N'].forEach(k => {
   $('promo' + k).addEventListener('click', () => sendPromo(k));

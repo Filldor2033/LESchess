@@ -111,6 +111,23 @@ class Game:
                 d += v if p.color == chess.WHITE else -v
         return d
 
+    def san_history(self):
+        """История ходов в шахматной нотации (SAN), парами: [белые, чёрные, ...]."""
+        # восстановить SAN: replay из начальной позиции
+        tmp = chess.Board()
+        sans = []
+        for mv in self.b.move_stack:
+            try:
+                sans.append(tmp.san(mv))
+                tmp.push(mv)
+            except Exception:
+                break
+        # сгруппировать парами
+        pairs = []
+        for i in range(0, len(sans), 2):
+            pairs.append([sans[i], sans[i + 1] if i + 1 < len(sans) else None])
+        return pairs
+
     def state(self):
         st = self.status()
         left = max(0, int(self.deadline - now())) if self.deadline else None
@@ -120,6 +137,7 @@ class Game:
                 'moves': self.moves,
                 'inCheck': self.b.is_check() if st == 'active' else False,
                 'material': self.material(),
+                'san': self.san_history(),
                 'moveTime': self.move_time, 'timeLeft': left}
 
 
@@ -195,6 +213,40 @@ async def enter_room(ws, r, name):
     notify_lobby()
     return name
 
+async def try_premove(room):
+    """Если игрок заготовил ход наперёд и пришла его очередь — применить его.
+    Нелегальный/устаревший ход отменяется с уведомлением игрока."""
+    pm = room.get('premove')
+    if not pm: return
+    g = room['game']
+    if g.status() != 'active':
+        room['premove'] = None
+        return
+    if g.turn_color() != pm['color']:
+        return   # ещё не очередь — ждём
+    room['premove'] = None
+    sx, sy = pm['from']
+    tx, ty = pm['to']
+    if (tx, ty) not in g.legal_moves(sx, sy):
+        # ход стал нелегальным (позиция изменилась) — отмена
+        for ws, nm in list(room['clients'].items()):
+            if nm == pm['player']:
+                try:
+                    await ws.send(json.dumps({'type': 'premove', 'ok': False,
+                                              'text': 'Заготовленный ход стал невозможен'}, ensure_ascii=False))
+                except Exception:
+                    pass
+                break
+        return
+    res = g.apply_move(sx, sy, tx, ty, promote=pm.get('promote'))
+    if res is None: return
+    await broadcast(room, {'type': 'move', 'from': [sx, sy], 'to': [tx, ty],
+                           'premoved': True, 'piece': res['captured'] and None,
+                           'state': g.state()})
+    if g.status() != 'active':
+        notify_lobby()
+
+
 async def handler(ws):
     name = None
     room = None
@@ -222,6 +274,7 @@ async def handler(ws):
                     await ws.send(json.dumps({'type': 'error', 'text': 'Неверный пароль комнаты'}, ensure_ascii=False))
                     continue
                 room = r
+                r.setdefault('premove', None)
                 if len(r['clients']) >= 2:
                     await ws.send(json.dumps({'type': 'error', 'text': 'Комната заполнена (макс. 2 игрока)'}, ensure_ascii=False))
                     room = None
@@ -248,12 +301,43 @@ async def handler(ws):
                 room_id = 'r-' + secrets.token_hex(4)
                 r = {'id': room_id, 'name': rname, 'password': password, 'created': now(),
                      'game': game, 'clients': {}, 'chat': [], 'players': {'w': None, 'b': None},
-                     'requests': {}}
+                     'requests': {}, 'premove': None}
                 ROOMS[room_id] = r
                 room = r
                 name = await enter_room(ws, r, name)
+            elif t == 'premove' and room:
+                # ход наперёд: игрок (не в свою очередь) заранее показывает ход;
+                # применится автоматически, когда придёт его очередь и ход легален
+                g = room['game']
+                if g.status() != 'active':
+                    await ws.send(json.dumps({'type': 'premove', 'ok': False, 'text': 'Партия окончена'}, ensure_ascii=False))
+                    continue
+                mycolor = 'w' if room['players'].get('w') == name else 'b'
+                if g.turn_color() == mycolor:
+                    await ws.send(json.dumps({'type': 'premove', 'ok': False, 'text': 'Сейчас твой ход — ходи обычным ходом'}, ensure_ascii=False))
+                    continue
+                if msg.get('clear'):
+                    room['premove'] = None
+                    await ws.send(json.dumps({'type': 'premove', 'ok': True, 'cleared': True}))
+                    continue
+                try:
+                    frm, to = msg['from'], msg['to']
+                except Exception:
+                    continue
+                # фигура на поле должна быть своя
+                p = g.piece(frm[0], frm[1])
+                if not p or p[0] != mycolor:
+                    await ws.send(json.dumps({'type': 'premove', 'ok': False, 'text': 'Это не твоя фигура'}, ensure_ascii=False))
+                    continue
+                room['premove'] = {'player': name, 'color': mycolor,
+                                   'from': [frm[0], frm[1]], 'to': [to[0], to[1]],
+                                   'promote': msg.get('promote') or None}
+                await ws.send(json.dumps({'type': 'premove', 'ok': True, 'from': [frm[0], frm[1]], 'to': [to[0], to[1]]}))
+
             elif t == 'leave' and room:
                 # явный выход: сразу освобождаем место и слот цвета
+                if room.get('premove', {}).get('player') == name if room.get('premove') else False:
+                    room['premove'] = None
                 leave_room(room, ws)
                 room = None
 
@@ -314,6 +398,9 @@ async def handler(ws):
                                        'piece': res['captured'] and None, 'state': g.state()})
                 if g.status() != 'active':
                     notify_lobby()   # комната «в игре» -> «свободна/окончена» в лобби
+                await try_premove(room)
+
+            # (авто-ход наперёд вынесен в хелпер ниже)
             elif t == 'reset' and room:
                 if not room['players'].get('w') or not room['players'].get('b'):
                     await ws.send(json.dumps({'type': 'error', 'text': 'Ждём второго игрока'}, ensure_ascii=False))
@@ -325,6 +412,7 @@ async def handler(ws):
                     ng.deadline = now() + ng.move_time
                 room['game'] = ng
                 room['requests'].clear()
+                room['premove'] = None
                 await broadcast(room, {'type': 'system', 'text': 'Новая партия — стороны поменялись', 'state': room['game'].state()})
                 broadcast_sync(room, {'type': 'players', 'players': room['players']})
                 notify_lobby()
@@ -370,6 +458,7 @@ async def handler(ws):
                 if kind == 'undo':
                     if ok:
                         g.undo(2)   # пара полуходов = один полный ход
+                        room['premove'] = None
                         await broadcast(room, {'type': 'system', 'text': f'{asker} отменил последний ход', 'state': g.state()})
                         await broadcast(room, {'type': 'request_done', 'kind': 'undo', 'ok': True})
                     else:
