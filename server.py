@@ -31,13 +31,27 @@ class Game:
         return [(chess.square_file(mv.to_square), 7 - chess.square_rank(mv.to_square))
                 for mv in self.b.legal_moves if mv.from_square == sq]
 
-    def apply_move(self, sx, sy, tx, ty):
-        mv = chess.Move(chess.square(sx, 7 - sy), chess.square(tx, 7 - ty))
+    def apply_move(self, sx, sy, tx, ty, promote=None):
+        sq_from = chess.square(sx, 7 - sy)
+        sq_to = chess.square(tx, 7 - ty)
+        piece = self.b.piece_at(sq_from)
+        mv = None
+        if (piece and piece.symbol().upper() == 'P'
+                and chess.square_rank(sq_to) in (0, 7)):
+            # запрос промоции: Q/R/B/N (по умолчанию Q)
+            promo = (promote or 'Q').upper()
+            if promo not in ('Q', 'R', 'B', 'N'):
+                promo = 'Q'
+            mv = chess.Move(sq_from, sq_to, promotion=chess.Piece.from_symbol(promo).piece_type)
+            if mv not in self.b.legal_moves:
+                mv = chess.Move(sq_from, sq_to, promotion=chess.QUEEN)
+        else:
+            mv = chess.Move(sq_from, sq_to)
         if mv not in self.b.legal_moves: return None
         captured = self.piece(tx, ty)
         self.b.push(mv)
         self.moves += 1
-        self.history.append((sx, sy, tx, ty))
+        self.history.append((sx, sy, tx, ty, mv.promotion))
         self.restart_clock()
         return {'captured': captured}
 
@@ -292,7 +306,7 @@ async def handler(ws):
                 if (tx, ty) not in g.legal_moves(sx, sy):
                     await ws.send(json.dumps({'type': 'error', 'text': 'Недопустимый ход'}))
                     continue
-                res = g.apply_move(sx, sy, tx, ty)
+                res = g.apply_move(sx, sy, tx, ty, promote=(msg.get('promote') or None))
                 await broadcast(room, {'type': 'move', 'from': [sx, sy], 'to': [tx, ty],
                                        'piece': res['captured'] and None, 'state': g.state()})
                 if g.status() != 'active':

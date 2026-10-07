@@ -322,6 +322,28 @@ button:disabled { opacity: 0.6; cursor: not-allowed; transform: none; }
     overflow-wrap: anywhere;
 }
 
+/* выбор фигуры при превращении */
+.promo-choices {
+    display: flex;
+    gap: 10px;
+    margin-top: 8px;
+}
+.promo-btn {
+    flex: 1;
+    min-width: 0;
+    width: auto;
+    padding: 14px 0 10px;
+    font-size: 34px;
+    line-height: 1;
+    color: #f8fafc;
+    background: linear-gradient(180deg, #3a475c, #334155);
+    box-shadow: none;
+}
+.promo-btn:hover {
+    background: linear-gradient(135deg, var(--accent), var(--accent-2));
+    color: #04120a;
+}
+
 /* кнопки внутри модалок: дышат, а не прилипают друг к другу */
 .modal button { margin-top: 6px; }
 .modal button + button { margin-top: 10px; }
@@ -983,6 +1005,22 @@ button:disabled { opacity: 0.6; cursor: not-allowed; transform: none; }
     </div>
 </div>
 
+<!-- ============ Модалка: превращение пешки ============ -->
+<div id="promoModal" class="modal-overlay" style="display:none">
+    <div class="glass-panel modal" role="dialog" aria-modal="true">
+        <div class="section">
+            <div class="section-title">Превращение пешки</div>
+            <div class="modal-hint">Выбери, кем станет пешка на последней горизонтали</div>
+            <div class="promo-choices">
+                <button id="promoQ" class="promo-btn" type="button" title="Ферзь">♕</button>
+                <button id="promoR" class="promo-btn" type="button" title="Ладья">♖</button>
+                <button id="promoB" class="promo-btn" type="button" title="Слон">♗</button>
+                <button id="promoN" class="promo-btn" type="button" title="Конь">♘</button>
+            </div>
+        </div>
+    </div>
+</div>
+
 <!-- ============ Модалка: время на ход ============ -->
 <div id="timeModal" class="modal-overlay" style="display:none">
     <div class="glass-panel modal" role="dialog" aria-modal="true">
@@ -1175,6 +1213,7 @@ function handleMessage(m) {
       state = m.state;
       inRoom = true;
       clockEnds = null;
+      lastRenderedMoveNo = -1;
       sessionStorage.setItem('chess_room', m.room.id);
       sessionStorage.setItem('chess_room_name', m.room.name);
       localStorage.setItem('chess_name', me);
@@ -1233,6 +1272,8 @@ function handleMessage(m) {
       }
       break;
     case 'moves':
+      // устаревший ответ (позиция уже изменилась) — подсказки неактуальны
+      if (state && state.moves < lastRenderedMoveNo) break;
       if (sel && sel[0] === m.x && sel[1] === m.y) {
         hints = m.moves;
         hintsPending = false;
@@ -1297,7 +1338,12 @@ function flashError(text) {
 }
 
 // ---------- Рендер ----------
+let lastRenderedMoveNo = -1;   // номер state.moves последнего отрисованного state
+
 function renderRoom() {
+  // анти-«перемешивание»: игнорируем устаревшие state (приходят с опозданием)
+  if (state && state.moves < lastRenderedMoveNo) return;
+  if (state) lastRenderedMoveNo = state.moves;
   renderBoard();
   renderPlayers();
   renderBadge();
@@ -1521,7 +1567,7 @@ function attachPieceDrag(cell, x, y) {
       if (tx === d.fromX && ty === d.fromY) { renderBoard(); return; }
       if (pending || hints.some(h => h[0] === tx && h[1] === ty)) {
         // hints может быть ещё пусты (RTT) — отправляем optimistic, сервер валидирует сам
-        send({type: 'move', from: [d.fromX, d.fromY], to: [tx, ty]});
+        trySendMove([d.fromX, d.fromY], [tx, ty]);
         return;
       }
     }
@@ -1578,7 +1624,7 @@ function onCellClick(x, y) {
   if (sel && (hintsPending || hints.some(h => h[0] === x && h[1] === y))) {
     if (sel[0] === x && sel[1] === y) return;   // ход в ту же клетку — не шлём на сервер
     // hints могут ещё не прийти (RTT) — отправляем optimistic, сервер валидирует
-    send({type: 'move', from: sel, to: [x, y]});
+    trySendMove(sel, [x, y]);
     hintsPending = false;
     return;
   }
@@ -1731,6 +1777,37 @@ function showIncomingRequest(m) {
   $('confirmCancel').addEventListener('click', cancel, {once: true});
   $('confirmModal').addEventListener('click', e => { if (e.target === $('confirmModal')) cancel(); }, {once: true});
 }
+
+// ---------- Превращение пешки ----------
+let pendingPromoMove = null;   // {from, to} — ждём выбора фигуры
+const PROMO = {Q: 'Q', R: 'R', B: 'B', N: 'N'};
+
+function isPromoMove(from, to) {
+  if (!state) return false;
+  const p = state.board[from[1]][from[0]];
+  if (!p || p[1] !== 'P') return false;
+  return to[1] === 0 || to[1] === 7;
+}
+
+function trySendMove(from, to) {
+  if (isPromoMove(from, to)) {
+    pendingPromoMove = {from: from.slice(), to: to.slice()};
+    $('promoModal').style.display = 'flex';
+    return;
+  }
+  send({type: 'move', from: from, to: to});
+}
+
+function sendPromo(kind) {
+  if (!pendingPromoMove) { $('promoModal').style.display = 'none'; return; }
+  const {from, to} = pendingPromoMove;
+  pendingPromoMove = null;
+  $('promoModal').style.display = 'none';
+  send({type: 'move', from, to, promote: kind});
+}
+['Q', 'R', 'B', 'N'].forEach(k => {
+  $('promo' + k).addEventListener('click', () => sendPromo(k));
+});
 
 // ---------- Кнопки партии: отмена хода / ничья / сдаться ----------
 $('undoBtn').addEventListener('click', () => {
