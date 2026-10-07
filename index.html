@@ -384,6 +384,28 @@ button:disabled { opacity: 0.6; cursor: not-allowed; transform: none; }
     min-height: 22px;
 }
 
+.turn-badge .clock {
+    display: inline-flex;
+    align-items: center;
+    padding: 2px 9px;
+    border-radius: 999px;
+    font-variant-numeric: tabular-nums;
+    font-size: 12px;
+    background: rgba(148, 163, 184, 0.14);
+    border: 1px solid rgba(148, 163, 184, 0.18);
+    color: var(--muted-2);
+}
+.turn-badge .clock.low {
+    background: rgba(239, 68, 68, 0.16);
+    border-color: rgba(239, 68, 68, 0.4);
+    color: #f87171;
+    animation: clockPulse 1s ease-in-out infinite;
+}
+@keyframes clockPulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.55; }
+}
+
 .turn-badge .dot {
     width: 11px;
     height: 11px;
@@ -931,6 +953,13 @@ button:disabled { opacity: 0.6; cursor: not-allowed; transform: none; }
             <div class="section-title" id="createRoomTitle">Новая комната</div>
             <input id="createRoomName" maxlength="40" placeholder="Название комнаты" autocomplete="off">
             <input id="createRoomPass" type="password" maxlength="40" placeholder="Пароль (необязательно)" autocomplete="new-password">
+            <select id="createRoomTime">
+                <option value="0">Время на ход: без лимита</option>
+                <option value="15">15 секунд на ход</option>
+                <option value="30">30 секунд на ход</option>
+                <option value="60">60 секунд на ход</option>
+                <option value="120">120 секунд на ход</option>
+            </select>
             <button id="createRoomGo" type="button">Создать</button>
             <button id="createRoomCancel" class="secondary" type="button">Отмена</button>
             <div id="createRoomStatus" class="status"></div>
@@ -1059,6 +1088,8 @@ let room = null;
 let state = null;
 let rooms = [];            // список комнат в лобби
 let pendingRoom = null;    // комната, в которую пытаемся войти (ждём пароль)
+let clockTimer = null;     // setInterval локального тика таймера
+let clockEnds = null;      // unix ms, когда истекает время текущего хода
 let players = {w: null, b: null};
 let sel = null;
 let hints = [];
@@ -1118,6 +1149,7 @@ function handleMessage(m) {
       players = m.players;
       state = m.state;
       inRoom = true;
+      clockEnds = null;
       sessionStorage.setItem('chess_room', m.room.id);
       sessionStorage.setItem('chess_room_name', m.room.name);
       localStorage.setItem('chess_name', me);
@@ -1126,6 +1158,7 @@ function handleMessage(m) {
       chatLog.innerHTML = '';
       lastMove = null; sel = null; hints = [];
       renderRoom();
+      restartClock();
       m.chat.forEach(addChatMsg);
       break;
     case 'room':
@@ -1137,24 +1170,34 @@ function handleMessage(m) {
     case 'state':
       state = m.state;
       renderRoom();
+      restartClock();
       break;
     case 'move':
       lastMove = {from: m.from, to: m.to};
       state = m.state;
       sel = null; hints = [];
       renderRoom();
+      restartClock();
       break;
     case 'chat':
       addChatMsg(m);
       break;
     case 'system':
       addChatMsg({type: 'system', text: m.text});
-      if (m.state) { state = m.state; sel = null; hints = []; lastMove = null; renderRoom(); }
+      if (m.state) { state = m.state; sel = null; hints = []; lastMove = null; renderRoom(); restartClock(); }
       break;
     case 'players':
       players = m.players;
       renderPlayers();
       renderBadge();
+      // соперник сел — часы стартовали на сервере; подтянем, если ещё не тикают
+      if (!clockTimer && state && state.status === 'active' && state.moveTime
+          && players.w && players.b) {
+        // запросим свежий state с timeLeft лёгким способом: ходы своей фигуры не шлём —
+        // сервер не имеет 'state'-запроса, но broadcast 'players' не несёт state.
+        // Проще: локально считаем от turn, а timeLeft подтянется при следующем ходе.
+        restartClock();
+      }
       break;
     case 'moves':
       if (sel && sel[0] === m.x && sel[1] === m.y) {
@@ -1261,8 +1304,32 @@ function renderBadge() {
   const my = state.turn === myColor;
   const who = state.turn === 'w' ? 'Ход белых' : 'Ход чёрных';
   const check = state.inCheck ? ' • ШАХ!' : '';
+  const clock = clockHtml();
   badge.className = 'turn-badge' + (my ? ' yourturn' : '');
-  badge.innerHTML = '<div class="dot ' + (state.turn === 'b' ? 'black' : '') + '"></div>' + (my ? 'Твой ход' : who) + check;
+  badge.innerHTML = '<div class="dot ' + (state.turn === 'b' ? 'black' : '') + '"></div>' + (my ? 'Твой ход' : who) + check + clock;
+}
+
+// ---------- Часы на ход ----------
+function clockHtml() {
+  if (!state || state.status !== 'active' || !state.moveTime || !clockEnds) return '';
+  const left = Math.max(0, Math.ceil((clockEnds - Date.now()) / 1000));
+  const low = left <= 10 ? ' low' : '';
+  return '<span class="clock' + low + '">⏱ ' + left + 'с</span>';
+}
+
+function restartClock() {
+  clearInterval(clockTimer);
+  clockTimer = null;
+  if (!state || state.status !== 'active' || !state.moveTime) return;
+  // сервер присылает timeLeft (сек) — превращаем в локальный дедлайн;
+  // если время только стартовало (timeLeft ещё не приехал) — берём полный лимит
+  if (state.timeLeft != null) clockEnds = Date.now() + state.timeLeft * 1000;
+  else clockEnds = Date.now() + state.moveTime * 1000;
+  renderBadge();
+  clockTimer = setInterval(() => {
+    if (!state || state.status !== 'active') { clearInterval(clockTimer); clockTimer = null; return; }
+    renderBadge();
+  }, 1000);
 }
 
 function renderGameover() {
@@ -1277,6 +1344,9 @@ function renderGameover() {
     const iLost = (state.result === 'w' && myColor === 'b') || (state.result === 'b' && myColor === 'w');
     t.textContent = 'Сдача';
     t.style.color = iLost ? 'var(--muted-2)' : 'var(--accent)';
+  } else if (state.status === 'timeup') {
+    t.textContent = 'Время истекло';
+    t.style.color = 'var(--muted-2)';
   } else {
     t.textContent = 'Ничья';
     t.style.color = 'var(--muted-2)';
@@ -1286,6 +1356,8 @@ function renderGameover() {
     s.textContent = (winner ? winner + ' выигрывает партию.' : '') + ' Сыграть ещё?';
   } else if (state.status === 'resign') {
     s.textContent = (winner ? winner + ' принимает победу — соперник сдался.' : '') + ' Сыграть ещё?';
+  } else if (state.status === 'timeup') {
+    s.textContent = (winner ? winner + ' побеждает — соперник просрочил ход.' : '') + ' Сыграть ещё?';
   } else {
     s.textContent = 'Никто не победил. Сыграть ещё?';
   }
@@ -1566,6 +1638,7 @@ function lobbyStatus(text, isErr) {
 function openCreateRoom() {
   $('createRoomName').value = '';
   $('createRoomPass').value = '';
+  $('createRoomTime').value = '0';
   $('createRoomStatus').textContent = '';
   $('createRoomModal').style.display = 'flex';
   setTimeout(() => $('createRoomName').focus(), 60);
@@ -1580,7 +1653,8 @@ function doCreateRoom() {
     return;
   }
   $('createRoomStatus').textContent = '';
-  send({type: 'create', name: nm, password: $('createRoomPass').value.trim(), playerName: me});
+  send({type: 'create', name: nm, password: $('createRoomPass').value.trim(),
+        moveTime: +$('createRoomTime').value, playerName: me});
   closeCreateRoom();
 }
 

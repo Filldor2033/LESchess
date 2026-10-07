@@ -10,10 +10,12 @@ PIECE_VAL = {'K': 0, 'Q': 9, 'R': 5, 'B': 3, 'N': 3, 'P': 1}
 # python-chess: rank 0 = 1-я горизонталь. Наш UI: y=0 сверху = 8-я горизонталь.
 # перевод: rank = 7 - y, file = x
 class Game:
-    def __init__(self):
+    def __init__(self, move_time=None):
         self.b = chess.Board()
         self.moves = 0
         self.history = []    # стек сделанных (sx, sy, tx, ty) для отмены
+        self.move_time = move_time    # сек на ход; None = без лимита
+        self.deadline = None          # unix ts, до какого времени текущий игрок должен ходить
 
     def piece(self, x, y):
         p = self.b.piece_at(chess.square(x, 7 - y))
@@ -36,7 +38,15 @@ class Game:
         self.b.push(mv)
         self.moves += 1
         self.history.append((sx, sy, tx, ty))
+        self.restart_clock()
         return {'captured': captured}
+
+    def restart_clock(self):
+        """Запустить/перезапустить отсчёт на ход текущего игрока."""
+        if self.move_time and self.status() == 'active' and not self.deadline:
+            self.deadline = now() + self.move_time
+        elif self.move_time:
+            self.deadline = now() + self.move_time
 
     def undo(self, halfmoves=2):
         """Откатить n полуходов (по умолчанию пара = один полный ход)."""
@@ -47,6 +57,9 @@ class Game:
             self.b.pop()
             self.history.pop()
             self.moves = max(0, self.moves - 1)
+        # после отката снова даём текущему игроку полный лимит
+        if self.move_time and self.status() == 'active':
+            self.deadline = now() + self.move_time
         return True
 
     def status(self):
@@ -54,6 +67,7 @@ class Game:
         if self.b.is_stalemate(): return 'stalemate'
         if getattr(self, 'resigned', None): return 'resign'
         if getattr(self, 'draw_agreed', False): return 'draw'
+        if getattr(self, 'flag_fell', None): return 'timeup'
         if self.b.is_insufficient_material(): return 'draw'
         if self.b.is_fifty_moves(): return 'draw'
         if self.b.is_repetition(3): return 'draw'
@@ -64,6 +78,8 @@ class Game:
             return 'w' if self.b.turn == chess.BLACK else 'b'
         if getattr(self, 'resigned', None):
             return 'b' if self.resigned == 'w' else 'w'   # победил не сдавшийся
+        if getattr(self, 'flag_fell', None):
+            return 'b' if self.flag_fell == 'w' else 'w'  # победил не просрочивший
         return 'draw'
 
     def in_check(self):
@@ -83,12 +99,14 @@ class Game:
 
     def state(self):
         st = self.status()
+        left = max(0, int(self.deadline - now())) if self.deadline else None
         return {'board': self.board_grid(), 'turn': self.turn_color(),
                 'status': st,
-                'result': self.result() if st in ('checkmate', 'stalemate', 'draw', 'resign') else None,
+                'result': self.result() if st in ('checkmate', 'stalemate', 'draw', 'resign', 'timeup') else None,
                 'moves': self.moves,
                 'inCheck': self.b.is_check() if st == 'active' else False,
-                'material': self.material()}
+                'material': self.material(),
+                'moveTime': self.move_time, 'timeLeft': left}
 
 
 # ---------------- Комнаты и WS ----------------
@@ -102,7 +120,8 @@ def now(): return int(time.time())
 def room_public(r):
     return {'id': r['id'], 'name': r['name'], 'players': len(r['clients']),
             'status': r['game'].status(), 'created': r['created'],
-            'locked': bool(r.get('password'))}
+            'locked': bool(r.get('password')),
+            'moveTime': r['game'].move_time}
 
 def notify_lobby():
     """Сообщить лобби обновлённый список комнат (неблокирующе)."""
@@ -149,6 +168,10 @@ async def enter_room(ws, r, name):
     if r['players']['w'] is None: r['players']['w'] = name
     elif r['players']['b'] is None: r['players']['b'] = name
     LOBBY.discard(ws)
+    # оба на месте и лимит задан — запускаем часы
+    g = r['game']
+    if g.move_time and r['players']['w'] and r['players']['b'] and not g.deadline and g.status() == 'active':
+        g.deadline = now() + g.move_time
     await ws.send(json.dumps({'type': 'welcome', 'name': name, 'color': 'w' if r['players']['w']==name else 'b',
                               'room': room_public(r), 'state': r['game'].state(),
                               'players': r['players'], 'chat': r['chat'][-60:]}, ensure_ascii=False))
@@ -191,17 +214,26 @@ async def handler(ws):
                     continue
                 name = await enter_room(ws, r, name)
             elif t == 'create' and not room:
-                # создать комнату со своим названием и паролем
+                # создать комнату со своим названием, паролем и лимитом времени на ход
                 rname = (msg.get('name') or '').strip()[:40]
                 password = (msg.get('password') or '').strip()[:40]
                 if not rname:
                     await ws.send(json.dumps({'type': 'error', 'text': 'Придумай название комнаты'}, ensure_ascii=False))
                     continue
+                # лимит: 15/30/60/120 сек или без него
+                try:
+                    move_time = int(msg.get('moveTime') or 0)
+                except Exception:
+                    move_time = 0
+                if move_time not in (0, 15, 30, 60, 120): move_time = 0
+                game = Game(move_time=move_time or None)
+                # часы стартуют, когда сели оба
+                game.deadline = None
                 name = (msg.get('playerName') or localStorage_name(msg) or 'Гость')
                 name = (name or 'Гость').strip()[:20] or 'Гость'
                 room_id = 'r-' + secrets.token_hex(4)
                 r = {'id': room_id, 'name': rname, 'password': password, 'created': now(),
-                     'game': Game(), 'clients': {}, 'chat': [], 'players': {'w': None, 'b': None},
+                     'game': game, 'clients': {}, 'chat': [], 'players': {'w': None, 'b': None},
                      'requests': {}}
                 ROOMS[room_id] = r
                 room = r
@@ -240,7 +272,10 @@ async def handler(ws):
                 if not room['players'].get('w') or not room['players'].get('b'):
                     await ws.send(json.dumps({'type': 'error', 'text': 'Ждём второго игрока'}, ensure_ascii=False))
                     continue
-                room['game'] = Game()
+                ng = Game(move_time=room['game'].move_time)
+                if ng.move_time and room['players']['w'] and room['players']['b']:
+                    ng.deadline = now() + ng.move_time
+                room['game'] = ng
                 room['requests'].clear()
                 await broadcast(room, {'type': 'system', 'text': 'Новая партия', 'state': room['game'].state()})
                 broadcast_sync(room, {'type': 'players', 'players': room['players']})
@@ -326,9 +361,25 @@ async def handler(ws):
 def localStorage_name(msg):
     return msg.get('playerName') or msg.get('name') or 'Гость'
 
+async def clock_ticker():
+    """Раз в секунду: просрочка хода -> фиксируем поражение, уведомляем комнату."""
+    while True:
+        await asyncio.sleep(1)
+        for r in list(ROOMS.values()):
+            g = r['game']
+            if (g.move_time and g.deadline and g.status() == 'active'
+                    and now() > g.deadline):
+                g.flag_fell = g.turn_color()   # просрочил текущий
+                g.deadline = None
+                await broadcast(r, {'type': 'system',
+                                    'text': 'Время на ход истекло',
+                                    'state': g.state()})
+                notify_lobby()
+
 async def ws_server():
     async with websockets.serve(handler, '0.0.0.0', 8091, ping_interval=20):
         print('WS on 8091')
+        asyncio.ensure_future(clock_ticker())
         await asyncio.Future()
 
 class Handler(SimpleHTTPRequestHandler):
