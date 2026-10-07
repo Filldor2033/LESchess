@@ -115,14 +115,15 @@ async def main():
         sysm, _ = await recv_until(bob, 'system', collect_errors=False)
         assert sysm and sysm.get('state', {}).get('status') == 'active'
         await drain(anna); await drain(bob)
-        # Anna сдаётся — победа чёрных (Bob)
+        # после reset стороны поменялись: Anna теперь чёрные. Она сдаётся →
+        # победа белых (Bob)
         await anna.send(json.dumps({'type': 'resign'}))
         sysm, _ = await recv_until(bob, 'system', collect_errors=False)
         assert sysm and sysm.get('state'), sysm
         st = sysm['state']
         assert st['status'] == 'resign', st
-        assert st['result'] == 'b', st
-        print('5. Сдача Anna: статус resign, победа чёрных')
+        assert st['result'] == 'w', st
+        print('5. Сдача Anna (после смены сторон): статус resign, победа белых')
 
         # --- 6. Запросы в оконченной партии отклоняются ---
         await anna.send(json.dumps({'type': 'undo'}))

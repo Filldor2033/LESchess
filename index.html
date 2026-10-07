@@ -959,7 +959,9 @@ button:disabled { opacity: 0.6; cursor: not-allowed; transform: none; }
                 <option value="30">30 секунд на ход</option>
                 <option value="60">60 секунд на ход</option>
                 <option value="120">120 секунд на ход</option>
+                <option value="custom">Своё время…</option>
             </select>
+            <input id="createRoomTimeCustom" type="number" min="5" max="600" placeholder="Секунд на ход (5–600)" autocomplete="off" style="display:none">
             <button id="createRoomGo" type="button">Создать</button>
             <button id="createRoomCancel" class="secondary" type="button">Отмена</button>
             <div id="createRoomStatus" class="status"></div>
@@ -977,6 +979,28 @@ button:disabled { opacity: 0.6; cursor: not-allowed; transform: none; }
             <button id="passGo" type="button">Войти</button>
             <button id="passCancel" class="secondary" type="button">Отмена</button>
             <div id="passStatus" class="status"></div>
+        </div>
+    </div>
+</div>
+
+<!-- ============ Модалка: время на ход ============ -->
+<div id="timeModal" class="modal-overlay" style="display:none">
+    <div class="glass-panel modal" role="dialog" aria-modal="true">
+        <div class="section">
+            <div class="section-title">Время на ход</div>
+            <div class="modal-hint">Лимит меняется сразу — часы перезапустятся с новым временем.</div>
+            <select id="timeModalSelect">
+                <option value="0">Без лимита</option>
+                <option value="15">15 секунд</option>
+                <option value="30">30 секунд</option>
+                <option value="60">60 секунд</option>
+                <option value="120">120 секунд</option>
+                <option value="custom">Своё время…</option>
+            </select>
+            <input id="timeModalCustom" type="number" min="5" max="600" placeholder="Секунд на ход (5–600)" autocomplete="off" style="display:none">
+            <button id="timeModalGo" type="button">Применить</button>
+            <button id="timeModalCancel" class="secondary" type="button">Отмена</button>
+            <div id="timeModalStatus" class="status"></div>
         </div>
     </div>
 </div>
@@ -1030,6 +1054,7 @@ button:disabled { opacity: 0.6; cursor: not-allowed; transform: none; }
                     <button id="undoBtn" class="secondary small-btn" type="button" title="Отменить последний ход (нужно согласие соперника)">↩ Ход</button>
                     <button id="drawBtn" class="secondary small-btn" type="button" title="Предложить ничью">½ Ничья</button>
                     <button id="resignBtn" class="secondary small-btn" type="button" title="Сдаться">⚑ Сдаться</button>
+                    <button id="timeBtn" class="secondary small-btn" type="button" title="Изменить время на ход">⏱ Время</button>
                 </div>
             </div>
 
@@ -1187,6 +1212,14 @@ function handleMessage(m) {
       if (m.state) { state = m.state; sel = null; hints = []; lastMove = null; renderRoom(); restartClock(); }
       break;
     case 'players':
+      // после «Новая партия» сервер меняет стороны: обновляем свой цвет
+      if (me && (m.players.w === me || m.players.b === me)) {
+        const newColor = m.players.w === me ? 'w' : 'b';
+        if (newColor !== myColor) {
+          myColor = newColor;
+          renderBoard();   // доска переворачивается под новый цвет
+        }
+      }
       players = m.players;
       renderPlayers();
       renderBadge();
@@ -1639,6 +1672,8 @@ function openCreateRoom() {
   $('createRoomName').value = '';
   $('createRoomPass').value = '';
   $('createRoomTime').value = '0';
+  $('createRoomTimeCustom').style.display = 'none';
+  $('createRoomTimeCustom').value = '';
   $('createRoomStatus').textContent = '';
   $('createRoomModal').style.display = 'flex';
   setTimeout(() => $('createRoomName').focus(), 60);
@@ -1652,9 +1687,18 @@ function doCreateRoom() {
     $('createRoomStatus').classList.add('error-text');
     return;
   }
+  let mt = $('createRoomTime').value;
+  if (mt === 'custom') {
+    mt = parseInt($('createRoomTimeCustom').value, 10);
+    if (!mt || mt < 5 || mt > 600) {
+      $('createRoomStatus').textContent = 'Время: 5–600 секунд';
+      $('createRoomStatus').classList.add('error-text');
+      return;
+    }
+  }
   $('createRoomStatus').textContent = '';
   send({type: 'create', name: nm, password: $('createRoomPass').value.trim(),
-        moveTime: +$('createRoomTime').value, playerName: me});
+        moveTime: +mt, playerName: me});
   closeCreateRoom();
 }
 
@@ -1758,17 +1802,61 @@ $('leaveBtn').addEventListener('click', () => {
   sessionStorage.removeItem('chess_room');
   sessionStorage.removeItem('chess_room_name');
   inRoom = false;
-  if (ws) { ws.onclose = null; ws.close(); }
+  if (ws) {
+    try { send({type: 'leave'}); } catch (e) {}
+    ws.onclose = null;
+    ws.close();
+  }
   location.reload();
 });
 $('resetBtn').addEventListener('click', () => send({type: 'reset'}));
 $('goBtn').addEventListener('click', () => send({type: 'reset'}));
 $('createBtn').addEventListener('click', openCreateRoom);
 $('createRoomGo').addEventListener('click', doCreateRoom);
+$('createRoomTime').addEventListener('change', () => {
+  const custom = $('createRoomTime').value === 'custom';
+  $('createRoomTimeCustom').style.display = custom ? 'block' : 'none';
+  if (custom) $('createRoomTimeCustom').focus();
+});
 $('createRoomCancel').addEventListener('click', closeCreateRoom);
 $('createRoomName').addEventListener('keydown', e => { if (e.key === 'Enter') doCreateRoom(); });
 $('createRoomPass').addEventListener('keydown', e => { if (e.key === 'Enter') doCreateRoom(); });
 $('createRoomModal').addEventListener('click', e => { if (e.target === $('createRoomModal')) closeCreateRoom(); });
+
+// ---------- Модалка: время на ход (в комнате) ----------
+function openTimeModal() {
+  const cur = state && state.moveTime ? String(state.moveTime) : '0';
+  const sel = $('timeModalSelect');
+  sel.value = [ '0','15','30','60','120' ].includes(cur) ? cur : 'custom';
+  $('timeModalCustom').style.display = sel.value === 'custom' ? 'block' : 'none';
+  if (sel.value === 'custom' && state.moveTime) $('timeModalCustom').value = state.moveTime;
+  else $('timeModalCustom').value = '';
+  $('timeModalStatus').textContent = '';
+  $('timeModal').style.display = 'flex';
+}
+function closeTimeModal() { $('timeModal').style.display = 'none'; }
+function doSetTime() {
+  let mt = $('timeModalSelect').value;
+  if (mt === 'custom') {
+    mt = parseInt($('timeModalCustom').value, 10);
+    if (!mt || mt < 5 || mt > 600) {
+      $('timeModalStatus').textContent = 'Время: 5–600 секунд';
+      $('timeModalStatus').classList.add('error-text');
+      return;
+    }
+  }
+  send({type: 'settime', moveTime: +mt});
+  closeTimeModal();
+}
+$('timeBtn').addEventListener('click', openTimeModal);
+$('timeModalGo').addEventListener('click', doSetTime);
+$('timeModalCancel').addEventListener('click', closeTimeModal);
+$('timeModal').addEventListener('click', e => { if (e.target === $('timeModal')) closeTimeModal(); });
+$('timeModalSelect').addEventListener('change', () => {
+  const custom = $('timeModalSelect').value === 'custom';
+  $('timeModalCustom').style.display = custom ? 'block' : 'none';
+  if (custom) $('timeModalCustom').focus();
+});
 
 $('passGo').addEventListener('click', doEnterPass);
 $('passCancel').addEventListener('click', closePass);

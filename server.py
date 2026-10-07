@@ -220,12 +220,12 @@ async def handler(ws):
                 if not rname:
                     await ws.send(json.dumps({'type': 'error', 'text': 'Придумай название комнаты'}, ensure_ascii=False))
                     continue
-                # лимит: 15/30/60/120 сек или без него
+                # лимит: 5..600 сек или без него (0)
                 try:
                     move_time = int(msg.get('moveTime') or 0)
                 except Exception:
                     move_time = 0
-                if move_time not in (0, 15, 30, 60, 120): move_time = 0
+                if move_time != 0 and (move_time < 5 or move_time > 600): move_time = 0
                 game = Game(move_time=move_time or None)
                 # часы стартуют, когда сели оба
                 game.deadline = None
@@ -238,6 +238,35 @@ async def handler(ws):
                 ROOMS[room_id] = r
                 room = r
                 name = await enter_room(ws, r, name)
+            elif t == 'leave' and room:
+                # явный выход: сразу освобождаем место и слот цвета
+                leave_room(room, ws)
+                room = None
+
+            elif t == 'settime' and room:
+                # сменить лимит времени на ход в живой комнате
+                try:
+                    mt = int(msg.get('moveTime') or 0)
+                except Exception:
+                    mt = -1
+                if mt != 0 and (mt < 5 or mt > 600):
+                    await ws.send(json.dumps({'type': 'error', 'text': 'Лимит: 0 или 5–600 секунд'}, ensure_ascii=False))
+                    continue
+                g = room['game']
+                if g.status() != 'active':
+                    await ws.send(json.dumps({'type': 'error', 'text': 'Партия уже окончена'}, ensure_ascii=False))
+                    continue
+                g.move_time = mt or None
+                if g.move_time:
+                    g.deadline = now() + g.move_time   # часы с новым лимитом сразу
+                else:
+                    g.deadline = None                  # без лимита — часы прочь
+                g.flag_fell = None
+                await broadcast(room, {'type': 'system',
+                                       'text': ('Лимит времени: ' + str(mt) + ' сек на ход') if mt else 'Лимит времени снят',
+                                       'state': g.state()})
+                notify_lobby()
+
             elif t == 'list' and not room:
                 # подписка на список комнат (лобби)
                 LOBBY.add(ws)
@@ -272,12 +301,14 @@ async def handler(ws):
                 if not room['players'].get('w') or not room['players'].get('b'):
                     await ws.send(json.dumps({'type': 'error', 'text': 'Ждём второго игрока'}, ensure_ascii=False))
                     continue
+                # смена сторон: кто играл белыми — теперь чёрными
+                room['players']['w'], room['players']['b'] = room['players']['b'], room['players']['w']
                 ng = Game(move_time=room['game'].move_time)
                 if ng.move_time and room['players']['w'] and room['players']['b']:
                     ng.deadline = now() + ng.move_time
                 room['game'] = ng
                 room['requests'].clear()
-                await broadcast(room, {'type': 'system', 'text': 'Новая партия', 'state': room['game'].state()})
+                await broadcast(room, {'type': 'system', 'text': 'Новая партия — стороны поменялись', 'state': room['game'].state()})
                 broadcast_sync(room, {'type': 'players', 'players': room['players']})
                 notify_lobby()
             elif t == 'moves' and room:
@@ -361,10 +392,29 @@ async def handler(ws):
 def localStorage_name(msg):
     return msg.get('playerName') or msg.get('name') or 'Гость'
 
+def ws_is_dead(ws):
+    """Соединение закрыто/зависло (совместимо со старым и новым websockets API)."""
+    try:
+        if hasattr(ws, 'state'):
+            from websockets.protocol import State
+            return ws.state is not State.OPEN
+        return bool(ws.closed)
+    except Exception:
+        return True
+
+
 async def clock_ticker():
-    """Раз в секунду: просрочка хода -> фиксируем поражение, уведомляем комнату."""
+    """Раз в секунду: просрочка хода -> поражение; чистка мёртвых соединений."""
     while True:
         await asyncio.sleep(1)
+        # вычищаем закрытые ws из комнат (страховка от зависших «игроков»)
+        for r in list(ROOMS.values()):
+            for ws in list(r['clients'].keys()):
+                if ws_is_dead(ws):
+                    leave_room(r, ws)
+            for ws in list(LOBBY):
+                if ws_is_dead(ws):
+                    LOBBY.discard(ws)
         for r in list(ROOMS.values()):
             g = r['game']
             if (g.move_time and g.deadline and g.status() == 'active'
