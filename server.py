@@ -13,6 +13,7 @@ class Game:
     def __init__(self):
         self.b = chess.Board()
         self.moves = 0
+        self.history = []    # стек сделанных (sx, sy, tx, ty) для отмены
 
     def piece(self, x, y):
         p = self.b.piece_at(chess.square(x, 7 - y))
@@ -34,11 +35,25 @@ class Game:
         captured = self.piece(tx, ty)
         self.b.push(mv)
         self.moves += 1
+        self.history.append((sx, sy, tx, ty))
         return {'captured': captured}
+
+    def undo(self, halfmoves=2):
+        """Откатить n полуходов (по умолчанию пара = один полный ход)."""
+        if halfmoves > len(self.history):
+            halfmoves = len(self.history)
+        if halfmoves <= 0: return False
+        for _ in range(halfmoves):
+            self.b.pop()
+            self.history.pop()
+            self.moves = max(0, self.moves - 1)
+        return True
 
     def status(self):
         if self.b.is_checkmate(): return 'checkmate'
         if self.b.is_stalemate(): return 'stalemate'
+        if getattr(self, 'resigned', None): return 'resign'
+        if getattr(self, 'draw_agreed', False): return 'draw'
         if self.b.is_insufficient_material(): return 'draw'
         if self.b.is_fifty_moves(): return 'draw'
         if self.b.is_repetition(3): return 'draw'
@@ -47,6 +62,8 @@ class Game:
     def result(self):
         if self.b.is_checkmate():
             return 'w' if self.b.turn == chess.BLACK else 'b'
+        if getattr(self, 'resigned', None):
+            return 'b' if self.resigned == 'w' else 'w'   # победил не сдавшийся
         return 'draw'
 
     def in_check(self):
@@ -68,7 +85,7 @@ class Game:
         st = self.status()
         return {'board': self.board_grid(), 'turn': self.turn_color(),
                 'status': st,
-                'result': self.result() if st in ('checkmate', 'stalemate', 'draw') else None,
+                'result': self.result() if st in ('checkmate', 'stalemate', 'draw', 'resign') else None,
                 'moves': self.moves,
                 'inCheck': self.b.is_check() if st == 'active' else False,
                 'material': self.material()}
@@ -161,7 +178,8 @@ async def handler(ws):
                     # создать, если не существует (reconnect или прямой вход)
                     r = {'id': room_id, 'name': (msg.get('roomName') or room_id).strip()[:40] or room_id,
                          'password': password, 'created': now(),
-                         'game': Game(), 'clients': {}, 'chat': [], 'players': {'w': None, 'b': None}}
+                         'game': Game(), 'clients': {}, 'chat': [], 'players': {'w': None, 'b': None},
+                         'requests': {}}
                     ROOMS[room_id] = r
                 elif r.get('password') and r['password'] != password:
                     await ws.send(json.dumps({'type': 'error', 'text': 'Неверный пароль комнаты'}, ensure_ascii=False))
@@ -183,7 +201,8 @@ async def handler(ws):
                 name = (name or 'Гость').strip()[:20] or 'Гость'
                 room_id = 'r-' + secrets.token_hex(4)
                 r = {'id': room_id, 'name': rname, 'password': password, 'created': now(),
-                     'game': Game(), 'clients': {}, 'chat': [], 'players': {'w': None, 'b': None}}
+                     'game': Game(), 'clients': {}, 'chat': [], 'players': {'w': None, 'b': None},
+                     'requests': {}}
                 ROOMS[room_id] = r
                 room = r
                 name = await enter_room(ws, r, name)
@@ -222,12 +241,81 @@ async def handler(ws):
                     await ws.send(json.dumps({'type': 'error', 'text': 'Ждём второго игрока'}, ensure_ascii=False))
                     continue
                 room['game'] = Game()
+                room['requests'].clear()
                 await broadcast(room, {'type': 'system', 'text': 'Новая партия', 'state': room['game'].state()})
                 broadcast_sync(room, {'type': 'players', 'players': room['players']})
                 notify_lobby()
             elif t == 'moves' and room:
                 mv = room['game'].legal_moves(msg['x'], msg['y'])
                 await ws.send(json.dumps({'type': 'moves', 'x': msg['x'], 'y': msg['y'], 'moves': [list(m) for m in mv]}))
+
+            # ---------- Запросы между игроками: отмена хода / ничья / сдача ----------
+            elif t in ('undo', 'draw') and room:
+                g = room['game']
+                if g.status() != 'active':
+                    await ws.send(json.dumps({'type': 'error', 'text': 'Партия уже окончена'}, ensure_ascii=False))
+                    continue
+                other = room['players'].get('b' if room['players'].get('w') == name else 'w')
+                if not other:
+                    await ws.send(json.dumps({'type': 'error', 'text': 'Соперник не в комнате'}, ensure_ascii=False))
+                    continue
+                if t == 'undo':
+                    # откатываем пару полуходов: ход просящего и ответ соперника
+                    mine_last = any(True for _ in g.history)
+                    if not mine_last:
+                        await ws.send(json.dumps({'type': 'error', 'text': 'Ходов ещё не было'}, ensure_ascii=False))
+                        continue
+                    if len(g.history) < 2:
+                        await ws.send(json.dumps({'type': 'error', 'text': 'Соперник ещё не сделал ход — жди его хода'}, ensure_ascii=False))
+                        continue
+                    room['requests']['undo'] = name
+                else:
+                    room['requests']['draw'] = name
+                kind_txt = 'отменить последний ход' if t == 'undo' else 'ничью'
+                await broadcast(room, {
+                    'type': 'request', 'kind': t, 'from': name,
+                    'text': f'{name} предлагает {kind_txt}. Согласиться?'})
+
+            elif t == 'answer' and room:
+                kind = msg.get('kind')      # undo | draw
+                ok = bool(msg.get('ok'))
+                asker = room['requests'].get(kind)
+                if not asker:
+                    continue
+                g = room['game']
+                room['requests'].pop(kind, None)
+                if kind == 'undo':
+                    if ok:
+                        g.undo(2)   # пара полуходов = один полный ход
+                        await broadcast(room, {'type': 'system', 'text': f'{asker} отменил последний ход', 'state': g.state()})
+                        await broadcast(room, {'type': 'request_done', 'kind': 'undo', 'ok': True})
+                    else:
+                        await broadcast(room, {'type': 'request_done', 'kind': 'undo', 'ok': False,
+                                               'text': f'{name} отклонил отмену хода'})
+                elif kind == 'draw':
+                    if ok:
+                        g.resigned = None
+                        g.draw_agreed = True
+                        await broadcast(room, {'type': 'system', 'text': 'Игроки согласились на ничью', 'state': g.state()})
+                        await broadcast(room, {'type': 'request_done', 'kind': 'draw', 'ok': True})
+                        notify_lobby()
+                    else:
+                        await broadcast(room, {'type': 'request_done', 'kind': 'draw', 'ok': False,
+                                               'text': f'{name} отклонил ничью'})
+
+            elif t == 'resign' and room:
+                g = room['game']
+                if g.status() != 'active':
+                    await ws.send(json.dumps({'type': 'error', 'text': 'Партия уже окончена'}, ensure_ascii=False))
+                    continue
+                if name not in (room['players'].get('w'), room['players'].get('b')):
+                    continue
+                loser = 'w' if room['players'].get('w') == name else 'b'
+                g.resigned = loser
+                await broadcast(room, {'type': 'system',
+                                       'text': f'{name} сдался', 'state': g.state()})
+                await broadcast(room, {'type': 'request_done', 'kind': 'resign', 'ok': True})
+                notify_lobby()
     except Exception:
         pass
     finally:

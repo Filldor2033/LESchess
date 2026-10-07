@@ -322,6 +322,23 @@ button:disabled { opacity: 0.6; cursor: not-allowed; transform: none; }
     overflow-wrap: anywhere;
 }
 
+/* кнопки внутри модалок: дышат, а не прилипают друг к другу */
+.modal button { margin-top: 6px; }
+.modal button + button { margin-top: 10px; }
+
+/* ============ Кнопки партии (отмена хода / ничья / сдаться) ============ */
+.game-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 10px;
+}
+.game-actions button {
+    flex: 1;
+    min-width: 0;
+    padding: 9px 8px;
+    font-size: 13px;
+}
+
 #lobbyEmpty {
     color: var(--muted-2);
     font-size: 13px;
@@ -935,6 +952,18 @@ button:disabled { opacity: 0.6; cursor: not-allowed; transform: none; }
     </div>
 </div>
 
+<!-- ============ Модалка: подтверждение действия (сдаться / согласиться) ============ -->
+<div id="confirmModal" class="modal-overlay" style="display:none">
+    <div class="glass-panel modal" role="dialog" aria-modal="true">
+        <div class="section">
+            <div class="section-title" id="confirmTitle">Подтверждение</div>
+            <div class="modal-hint" id="confirmText"></div>
+            <button id="confirmGo" type="button">Да</button>
+            <button id="confirmCancel" class="secondary" type="button">Отмена</button>
+        </div>
+    </div>
+</div>
+
 <!-- ============ Игровая комната ============ -->
 <div id="gameWrap" class="glass-panel">
     <div class="header">
@@ -968,6 +997,11 @@ button:disabled { opacity: 0.6; cursor: not-allowed; transform: none; }
             <div class="section-block">
                 <div class="section-title">Игроки</div>
                 <div class="players-box" id="playersBox"></div>
+                <div class="game-actions">
+                    <button id="undoBtn" class="secondary small-btn" type="button" title="Отменить последний ход (нужно согласие соперника)">↩ Ход</button>
+                    <button id="drawBtn" class="secondary small-btn" type="button" title="Предложить ничью">½ Ничья</button>
+                    <button id="resignBtn" class="secondary small-btn" type="button" title="Сдаться">⚑ Сдаться</button>
+                </div>
             </div>
 
             <div class="glass-panel chat" style="flex:1;min-height:0">
@@ -1145,6 +1179,22 @@ function handleMessage(m) {
         }
       }
       break;
+    case 'request':
+      // соперник предлагает: отмена хода / ничья — показать запрос
+      if (m.from === me) return;   // своё предложение — ждём ответ
+      showIncomingRequest(m);
+      break;
+    case 'request_done':
+      closeConfirmModal();
+      if (m.kind === 'resign') {
+        // сдача: игра окончена
+        if (m.state) { state = m.state; }
+        renderRoom();
+      } else if (!m.ok && m.text) {
+        flashError(m.text);
+      }
+      // при ok придёт 'system' с новым state → renderRoom
+      break;
     case 'error':
       if (!inRoom && lobbyWrap.style.display !== 'none') {
         // ошибка в лобби: неверный пароль / комната заполнена
@@ -1223,14 +1273,22 @@ function renderGameover() {
   if (state.status === 'checkmate') {
     t.textContent = state.result === 'w' ? 'Мат! Победили белые' : 'Мат! Победили чёрные';
     t.style.color = 'var(--accent)';
-  } else if (state.status === 'stalemate') {
-    t.textContent = 'Пат — ничья';
+  } else if (state.status === 'resign') {
+    const iLost = (state.result === 'w' && myColor === 'b') || (state.result === 'b' && myColor === 'w');
+    t.textContent = 'Сдача';
+    t.style.color = iLost ? 'var(--muted-2)' : 'var(--accent)';
+  } else {
+    t.textContent = 'Ничья';
     t.style.color = 'var(--muted-2)';
   }
   const winner = state.result === 'w' ? players.w : players.b;
-  s.textContent = (state.status === 'checkmate' && winner)
-    ? winner + ' выигрывает партию. Сыграть ещё?'
-    : 'Никто не победил. Сыграть ещё?';
+  if (state.status === 'checkmate') {
+    s.textContent = (winner ? winner + ' выигрывает партию.' : '') + ' Сыграть ещё?';
+  } else if (state.status === 'resign') {
+    s.textContent = (winner ? winner + ' принимает победу — соперник сдался.' : '') + ' Сыграть ещё?';
+  } else {
+    s.textContent = 'Никто не победил. Сыграть ещё?';
+  }
 }
 
 // ---------- Доска ----------
@@ -1525,6 +1583,56 @@ function doCreateRoom() {
   send({type: 'create', name: nm, password: $('createRoomPass').value.trim(), playerName: me});
   closeCreateRoom();
 }
+
+// ---------- Модалка: подтверждение действия / запрос соперника ----------
+let confirmAction = null;   // что делать при «Да»
+function openConfirm(title, text, onGo) {
+  confirmAction = onGo;
+  $('confirmTitle').textContent = title;
+  $('confirmText').textContent = text;
+  $('confirmGo').textContent = 'Да';
+  $('confirmModal').style.display = 'flex';
+}
+function closeConfirmModal() {
+  $('confirmModal').style.display = 'none';
+  confirmAction = null;
+}
+$('confirmGo').addEventListener('click', () => { if (confirmAction) confirmAction(); });
+$('confirmCancel').addEventListener('click', closeConfirmModal);
+$('confirmModal').addEventListener('click', e => { if (e.target === $('confirmModal')) closeConfirmModal(); });
+
+// соперник что-то предложил — спросить согласие
+function showIncomingRequest(m) {
+  const kindTxt = m.kind === 'undo' ? 'отменить последний ход' : 'ничью';
+  openConfirm('Запрос от соперника', m.from + ' предлагает ' + kindTxt + '. Согласиться?', () => {
+    send({type: 'answer', kind: m.kind, ok: true});
+    closeConfirmModal();
+  });
+  // кнопка «Отмена» = отказ: переопределим через отдельный листенер после закрытия
+  const cancel = () => { send({type: 'answer', kind: m.kind, ok: false}); };
+  $('confirmCancel').addEventListener('click', cancel, {once: true});
+  $('confirmModal').addEventListener('click', e => { if (e.target === $('confirmModal')) cancel(); }, {once: true});
+}
+
+// ---------- Кнопки партии: отмена хода / ничья / сдаться ----------
+$('undoBtn').addEventListener('click', () => {
+  openConfirm('Отмена хода', 'Отменить последний ход? Сопернику придётся согласиться.', () => {
+    send({type: 'undo'});
+    closeConfirmModal();
+  });
+});
+$('drawBtn').addEventListener('click', () => {
+  openConfirm('Предложить ничью', 'Предложить сопернику ничью?', () => {
+    send({type: 'draw'});
+    closeConfirmModal();
+  });
+});
+$('resignBtn').addEventListener('click', () => {
+  openConfirm('Сдаться', 'Точно сдаться? Партия будет проиграна.', () => {
+    send({type: 'resign'});
+    closeConfirmModal();
+  });
+});
 
 // ---------- Модалка: пароль ----------
 function closePass() {
