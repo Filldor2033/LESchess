@@ -1242,6 +1242,8 @@ function handleMessage(m) {
       sel = null; hints = [];
       renderRoom();
       restartClock();
+      // ход сделан — открытую time-модалку закрываем (менять уже нельзя)
+      if ($('timeModal').style.display === 'flex') closeTimeModal();
       break;
     case 'chat':
       addChatMsg(m);
@@ -1348,6 +1350,9 @@ function renderRoom() {
   renderPlayers();
   renderBadge();
   renderGameover();
+  // время меняется только до первого хода
+  const timeBtn = $('timeBtn');
+  if (timeBtn) timeBtn.disabled = !!(state && state.moves > 0);
 }
 
 function renderPlayers() {

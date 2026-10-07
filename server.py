@@ -270,6 +270,9 @@ async def handler(ws):
                 if g.status() != 'active':
                     await ws.send(json.dumps({'type': 'error', 'text': 'Партия уже окончена'}, ensure_ascii=False))
                     continue
+                if g.moves > 0:
+                    await ws.send(json.dumps({'type': 'error', 'text': 'Время можно менять только до начала партии'}, ensure_ascii=False))
+                    continue
                 g.move_time = mt or None
                 if g.move_time:
                     g.deadline = now() + g.move_time   # часы с новым лимитом сразу
