@@ -210,4 +210,33 @@ WantedBy=multi-user.target
 
 ## 📄 Лицензия
 
-Проект распространяется по лицензии [GPLv3](LICENSE).
+<div align="center">
+
+Данный проект распространяется под лицензией **GPL-3.0**.
+
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue?style=for-the-badge&logo=gnu&logoColor=white)](https://www.gnu.org/licenses/gpl-3.0)
+
+**© 2026 LESchess**
+
+</div>
+
+---
+
+## 🧩 Другие проекты
+
+<div align="center">
+
+**LESogram** — мой мессенджер с обменом текстовыми и медиа сообщениями в реальном времени.
+Если интересно — заходи, смотри:
+
+👉 **[github.com/Filldor2033/LESogram](https://github.com/Filldor2033/LESogram)**
+
+</div>
+
+---
+
+<div align="center">
+
+### ⭐ Если вам понравился проект, поставьте звёздочку на GitHub!
+
+</div>
