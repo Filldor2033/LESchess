@@ -1168,7 +1168,10 @@ function wsUrl() {
 function connect() {
   ws = new WebSocket(wsUrl());
   ws.onmessage = e => {
-    try { handleMessage(JSON.parse(e.data)); } catch (err) { console.error(err); }
+    // строгий порядок: сообщения обрабатываются по одному, в порядке прихода;
+    // рендеры склеиваются в один на кадр (requestAnimationFrame)
+    msgQueue.push(e.data);
+    if (!processing) processQueue();
   };
   ws.onclose = () => {
     if (inRoom) {
@@ -1198,6 +1201,38 @@ function showScreen(which) {
 }
 showScreen('auth');
 
+// ---------- Очередь сообщений: строгий порядок + один рендер на кадр ----------
+let msgQueue = [];
+let processing = false;
+let renderQueued = false;
+let renderFn = null;   // последний полный рендер
+
+function processQueue() {
+  processing = true;
+  while (msgQueue.length) {
+    const raw = msgQueue.shift();
+    try { handleMessage(JSON.parse(raw)); } catch (err) { console.error(err); }
+  }
+  processing = false;
+  // отложенный единый рендер
+  if (renderQueued && renderFn) {
+    const fn = renderFn;
+    renderQueued = false;
+    renderFn = null;
+    fn();
+  }
+  // страховка оверлея: партия активна — плашки «окончена» быть не должно
+  if (state && state.status === 'active') {
+    const go = $('gameover');
+    if (go && go.classList.contains('show')) go.classList.remove('show');
+  }
+}
+
+function queueRender(fn) {
+  renderFn = fn;
+  renderQueued = true;
+}
+
 // ---------- Сообщения ----------
 function handleMessage(m) {
   switch (m.type) {
@@ -1214,6 +1249,7 @@ function handleMessage(m) {
       inRoom = true;
       clockEnds = null;
       lastRenderedMoveNo = -1;
+      renderEpoch = 0;
       sessionStorage.setItem('chess_room', m.room.id);
       sessionStorage.setItem('chess_room_name', m.room.name);
       localStorage.setItem('chess_name', me);
@@ -1233,14 +1269,14 @@ function handleMessage(m) {
       break;
     case 'state':
       state = m.state;
-      renderRoom();
+      queueRender(renderRoom);
       restartClock();
       break;
     case 'move':
       lastMove = {from: m.from, to: m.to};
       state = m.state;
       sel = null; hints = [];
-      renderRoom();
+      queueRender(renderRoom);
       restartClock();
       // ход сделан — открытую time-модалку закрываем (менять уже нельзя)
       if ($('timeModal').style.display === 'flex') closeTimeModal();
@@ -1250,7 +1286,13 @@ function handleMessage(m) {
       break;
     case 'system':
       addChatMsg({type: 'system', text: m.text});
-      if (m.state) { state = m.state; sel = null; hints = []; lastMove = null; renderRoom(); restartClock(); }
+      if (m.state) {
+        state = m.state; sel = null; hints = []; lastMove = null;
+        // рендерим СРАЗУ (важен порядок: оверлей должен уйти синхронно)
+        renderRoom();
+        restartClock();
+        // смена сторон/лимита: оверлей «окончена» уходит при активном state
+      }
       break;
     case 'players':
       // после «Новая партия» сервер меняет стороны: обновляем свой цвет
@@ -1258,7 +1300,7 @@ function handleMessage(m) {
         const newColor = m.players.w === me ? 'w' : 'b';
         if (newColor !== myColor) {
           myColor = newColor;
-          renderBoard();   // доска переворачивается под новый цвет
+          queueRender(renderRoom);   // доска переворачивается под новый цвет
         }
       }
       players = m.players;
@@ -1275,7 +1317,12 @@ function handleMessage(m) {
       break;
     case 'moves':
       // устаревший ответ (позиция уже изменилась) — подсказки неактуальны
-      if (state && state.moves < lastRenderedMoveNo) break;
+      if (state && state.moves > 0 && state.moves < lastRenderedMoveNo) break;
+      // фигуры под sel уже нет (ход/взятие изменили позицию) — подсказки не рисуем
+      if (sel && (!state.board[sel[1]] || !state.board[sel[1]][sel[0]])) {
+        hints = []; hintsPending = false;
+        break;
+      }
       if (sel && sel[0] === m.x && sel[1] === m.y) {
         hints = m.moves;
         hintsPending = false;
@@ -1341,10 +1388,20 @@ function flashError(text) {
 
 // ---------- Рендер ----------
 let lastRenderedMoveNo = -1;   // номер state.moves последнего отрисованного state
+let renderEpoch = 0;            // растёт при каждой новой партии (reset)
+
+function stateEpochKey(st) {
+  // упорядочивание эпох: resets считаются «новее» любого числа полуходов
+  return st.moves + 1000000 * renderEpoch;
+}
 
 function renderRoom() {
-  // анти-«перемешивание»: игнорируем устаревшие state (приходят с опозданием)
-  if (state && state.moves < lastRenderedMoveNo) return;
+  // анти-«перемешивание»: игнорируем устаревшие state (приходят с опозданием).
+  // reset (moves=0 при активной партии) — новая эпоха, всегда легитимен
+  if (state && state.moves === 0 && lastRenderedMoveNo !== -1 && state.status === 'active') {
+    renderEpoch++;
+  }
+  if (state && state.moves > 0 && state.moves < lastRenderedMoveNo) return;
   if (state) lastRenderedMoveNo = state.moves;
   renderBoard();
   renderPlayers();
