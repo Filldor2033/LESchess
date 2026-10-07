@@ -1233,7 +1233,7 @@ function renderPlayers() {
   const w = players.w, b = players.b;
   box.innerHTML =
     '<div class="player-row">' +
-      '<div class="player-avatar">В</div>' +
+      '<div class="player-avatar">Б</div>' +
       '<div class="player-name">' + (w ? esc(w) + (w === me ? ' <span style="color:var(--muted);font-weight:normal">(ты)</span>' : '') : '') + '</div>' +
       '<div class="player-badge' + (w ? '' : ' pending') + '">' + (w ? 'белые' : 'ждём...') + '</div>' +
     '</div>' +
