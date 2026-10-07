@@ -451,7 +451,7 @@ button:disabled { opacity: 0.6; cursor: not-allowed; transform: none; }
     display: flex;
     gap: 18px;
     padding: 18px;
-    align-items: flex-start;
+    align-items: stretch;      /* колонка равна высоте доски — чат не растёт вниз */
     flex-wrap: wrap;
 }
 
@@ -581,6 +581,8 @@ button:disabled { opacity: 0.6; cursor: not-allowed; transform: none; }
     display: flex;
     flex-direction: column;
     gap: 14px;
+    max-height: 100%;          /* не выше доски */
+    min-height: 0;
 }
 
 .players-box { display: flex; flex-direction: column; gap: 8px; }
@@ -590,7 +592,7 @@ button:disabled { opacity: 0.6; cursor: not-allowed; transform: none; }
     grid-template-columns: 38px minmax(0, 1fr) auto;
     align-items: center;
     gap: 10px;
-    padding: 10px;
+    padding: 7px 10px;
     border-radius: 14px;
     transition: background 0.15s ease, transform 0.15s ease;
 }
@@ -644,11 +646,11 @@ button:disabled { opacity: 0.6; cursor: not-allowed; transform: none; }
 }
 
 /* --- Чат (как в LESogram) --- */
-.chat { display: flex; flex-direction: column; min-height: 320px; }
+.chat { display: flex; flex-direction: column; min-height: 320px; flex: 1 1 auto; min-height: 0; }
 
 .chat-log {
-    flex: 1;
-    min-height: 220px;
+    flex: 1 1 0;               /* ровно остаток высоты панели — не растягивает страницу */
+    min-height: 120px;
     overflow-y: auto;
     overscroll-behavior: contain;
     padding: 14px;
@@ -826,7 +828,7 @@ button:disabled { opacity: 0.6; cursor: not-allowed; transform: none; }
 
     .header-row { flex-wrap: wrap; }
     .chat-log { min-height: 160px; }
-    .chat { min-height: 220px; }
+    .chat { min-height: 180px; max-height: 42dvh; }
 }
 
 /* ============ Телефон ============ */
@@ -867,7 +869,7 @@ button:disabled { opacity: 0.6; cursor: not-allowed; transform: none; }
     .side { gap: 10px; }
 
     /* --- Чат: тянется до низа экрана, композер не прыгает при клавиатуре --- */
-    .chat { min-height: 0; flex: 1; }
+    .chat { min-height: 0; flex: 1; max-height: 52dvh; }
     .chat .section { padding: 10px 12px 0 12px; }
     .chat-log {
         min-height: 180px;
