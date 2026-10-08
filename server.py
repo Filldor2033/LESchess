@@ -141,53 +141,55 @@ class Game:
                 'moveTime': self.move_time, 'timeLeft': left}
 
 
-# ---------------- Бот ----------------
+# ---------------- Бот (Stockfish) ----------------
+
+import chess.engine
 
 BOT_NAME = 'Компьютер'
-BOT_DEPTH = 2   # глубина поиска material-эвристики
+STOCKFISH_BIN = None   # автопоиск при старте
+_sf_engine = None      # ленивый общий инстанс
 
-def bot_pick_move(g):
-    """Ход бота: перебор глубины 2 по материалу (взятия/мат) + шум."""
-    import random
-    board = g.b
-    legal = list(board.legal_moves)
-    if not legal: return None
-    best, best_score = None, None
-    for mv in legal:
-        score = random.uniform(0, 2)
-        cap = board.piece_at(mv.to_square)
-        if cap:
-            score += PIECE_VAL[cap.symbol().upper()] * 10
-        if mv.promotion:
-            score += 80
-        board.push(mv)
-        if board.is_checkmate():
-            score += 1000
-        elif not board.is_game_over():
-            # лучший ответ соперника (жадный по взятиям)
-            opp_gain = 0
-            for omv in board.legal_moves:
-                ocap = board.piece_at(omv.to_square)
-                if ocap:
-                    opp_gain = max(opp_gain, PIECE_VAL[ocap.symbol().upper()] * 10)
-                # мат от соперника?
-                board.push(omv)
-                if board.is_checkmate():
-                    opp_gain = 999
-                board.pop()
-            score -= opp_gain
-        board.pop()
-        if best_score is None or score > best_score:
-            best_score, best = score, mv
-    return best
+def _find_stockfish():
+    """Найти бинарь Stockfish в типовых местах."""
+    import shutil, os
+    for path in (shutil.which('stockfish'), '/usr/games/stockfish', '/usr/bin/stockfish',
+                 '/usr/local/bin/stockfish'):
+        if path and os.path.isfile(path) and os.access(path, os.X_OK):
+            return path
+    return None
+
+def sf_get():
+    """Общий инстанс движка (одна копия на сервер)."""
+    global _sf_engine, STOCKFISH_BIN
+    if _sf_engine is not None:
+        return _sf_engine
+    STOCKFISH_BIN = STOCKFISH_BIN or _find_stockfish()
+    if not STOCKFISH_BIN:
+        return None
+    try:
+        _sf_engine = chess.engine.SimpleEngine.popen_uci(STOCKFISH_BIN)
+        _sf_engine.configure({'Threads': 1, 'Hash': 64})
+        return _sf_engine
+    except Exception:
+        _sf_engine = None
+        return None
 
 async def bot_play_if_turn(r):
-    """Если очередь бота — сходить (с маленькой задержкой на реалистичность)."""
+    """Если очередь бота — Stockfish выбирает ход (быстро, с паузой на естественность)."""
     g = r['game']
     if g.status() != 'active': return
     bot_color = r['bot_color']
     if g.turn_color() != bot_color: return
-    mv = bot_pick_move(g)
+    eng = sf_get()
+    if eng is None:
+        return   # движка нет — бот молчит (клиент покажет отсутствие хода)
+    try:
+        # ограничение: 0.2 сек thinking time — за глаза и не грузит VPS
+        result = await asyncio.get_event_loop().run_in_executor(
+            None, lambda: eng.play(g.b.copy(), chess.engine.Limit(time=0.2)))
+        mv = result.move
+    except Exception:
+        return
     if mv is None: return
     sx, sy = chess.square_file(mv.from_square), 7 - chess.square_rank(mv.from_square)
     tx, ty = chess.square_file(mv.to_square), 7 - chess.square_rank(mv.to_square)
