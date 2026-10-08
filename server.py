@@ -209,7 +209,9 @@ CONNS = set()
 def now(): return int(time.time())
 
 def room_public(r):
-    return {'id': r['id'], 'name': r['name'], 'players': len(r['clients']),
+    # бот занимает второй слот — комната выглядит полной (2/2)
+    players = len(r['clients']) + (1 if r.get('bot_color') else 0)
+    return {'id': r['id'], 'name': r['name'], 'players': players,
             'status': r['game'].status(), 'created': r['created'],
             'locked': bool(r.get('password')),
             'bot': bool(r.get('bot_color')),
@@ -351,6 +353,10 @@ async def handler(ws):
                 room = r
                 r.setdefault('premove', None)
                 r.setdefault('bot_color', None)
+                if r.get('bot_color') and len(r['clients']) >= 1:
+                    await ws.send(json.dumps({'type': 'error', 'text': 'В комнате играет компьютер — комната закрыта'}, ensure_ascii=False))
+                    room = None
+                    continue
                 if len(r['clients']) >= 2:
                     await ws.send(json.dumps({'type': 'error', 'text': 'Комната заполнена (макс. 2 игрока)'}, ensure_ascii=False))
                     room = None
@@ -563,6 +569,9 @@ async def handler(ws):
                 await broadcast(room, {'type': 'system', 'text': 'Новая партия — стороны поменялись', 'state': room['game'].state()})
                 broadcast_sync(room, {'type': 'players', 'players': room['players']})
                 notify_lobby()
+                # бот теперь возможно белые — пусть начинает
+                if room.get('bot_color'):
+                    asyncio.ensure_future(bot_turn_soon(room, delay=1.0))
             elif t == 'moves' and room:
                 mv = room['game'].legal_moves(msg['x'], msg['y'])
                 await ws.send(json.dumps({'type': 'moves', 'x': msg['x'], 'y': msg['y'], 'moves': [list(m) for m in mv]}))
@@ -577,24 +586,21 @@ async def handler(ws):
                 bc = room.get('bot_color')
                 if bc:
                     if t == 'undo':
-                        # бот соглашается на отмену хода (мягкий характер)
-                        ok = g.moves >= 2
-                        if ok:
+                        # бот соглашается на любую отмену
+                        if g.moves >= 2:
                             g.undo(2)
                             room['premove'] = None
                             await broadcast(room, {'type': 'system', 'text': 'Компьютер согласился отменить ход', 'state': g.state()})
+                        elif g.moves == 1:
+                            g.undo(1)
+                            room['premove'] = None
+                            await broadcast(room, {'type': 'system', 'text': 'Компьютер согласился отменить ход', 'state': g.state()})
                         else:
-                            await ws.send(json.dumps({'type': 'error', 'text': 'Ходов ещё не было', 'sorted': False}, ensure_ascii=False))
+                            await ws.send(json.dumps({'type': 'error', 'text': 'Ходов ещё не было'}, ensure_ascii=False))
                         continue
                     else:
-                        # на ничью бот соглашается при равном материале, иначе отказ
-                        agree = abs(g.material()) <= 1
-                        if agree:
-                            g.draw_agreed = True
-                            await broadcast(room, {'type': 'system', 'text': 'Компьютер согласился на ничью', 'state': g.state()})
-                            notify_lobby()
-                        else:
-                            await ws.send(json.dumps({'type': 'request_done', 'kind': 'draw', 'ok': False, 'text': 'Компьютер отклонил ничью'}))
+                        # ничьей с компьютером нет (кнопка скрыта)
+                        await ws.send(json.dumps({'type': 'request_done', 'kind': 'draw', 'ok': False, 'text': 'С компьютером ничьей не бывает'}))
                         continue
                 other = room['players'].get('b' if room['players'].get('w') == name else 'w')
                 if not other:

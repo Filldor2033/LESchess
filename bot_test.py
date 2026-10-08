@@ -77,12 +77,11 @@ async def main():
         assert sysm and 'отменить' in sysm['text'], sysm
         print('6. Undo: ', sysm['text'])
 
-        # draw с ботом: материал равен → согласие
+        # draw с ботом: кнопка скрыта, протокол отклоняет
         await a.send(json.dumps({'type': 'draw'}))
-        sysm, _ = await recv_until(a, 'system', timeout=4)
-        assert sysm and 'ничью' in sysm['text'], sysm
-        assert sysm['state']['status'] == 'draw'
-        print('7. Draw: ', sysm['text'])
+        rd, _ = await recv_until(a, 'request_done', timeout=4)
+        assert rd and rd['ok'] is False, rd
+        print('7. Draw с ботом отклонён:', rd.get('text'))
 
         # новая партия с ботом (стороны меняются: человек чёрные)
         await a.send(json.dumps({'type': 'reset'}))

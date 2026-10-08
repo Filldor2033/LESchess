@@ -662,6 +662,12 @@ button:disabled { opacity: 0.6; cursor: not-allowed; transform: none; }
     color: white;
 }
 
+.player-avatar.bot {
+    background: linear-gradient(135deg, #64748b, #334155);
+    color: #a5f3c0;
+    letter-spacing: 0.5px;
+}
+
 .player-name {
     min-width: 0;
     font-weight: bold;
@@ -1143,7 +1149,7 @@ button:disabled { opacity: 0.6; cursor: not-allowed; transform: none; }
                     <button id="timeBtn" class="secondary small-btn" type="button" title="Изменить время на ход">⏱ Время</button>
                 </div>
                 <div class="game-actions">
-                    <button id="botBtn" class="small-btn" type="button" title="Пригласить компьютер в комнату">🤖 Позвать компьютер</button>
+                    <button id="botBtn" class="small-btn" type="button" title="Пригласить компьютер в комнату">Позвать компьютер</button>
                     <button id="botKickBtn" class="secondary small-btn" type="button" style="display:none" title="Выгнать компьютер из комнаты">✖ Выгнать компьютер</button>
                 </div>
             </div>
@@ -1495,12 +1501,12 @@ function renderPlayers() {
   const isBot = nm => nm === 'Компьютер';
   box.innerHTML =
     '<div class="player-row">' +
-      '<div class="player-avatar">' + (isBot(w) ? '🤖' : 'Б') + '</div>' +
+      '<div class="player-avatar' + (isBot(w) ? ' bot' : '') + '">' + (isBot(w) ? 'К' : 'Б') + '</div>' +
       '<div class="player-name">' + (w ? esc(w) + (w === me ? ' <span style="color:var(--muted);font-weight:normal">(ты)</span>' : '') : '') + '</div>' +
       '<div class="player-badge' + (w ? '' : ' pending') + '">' + (w ? 'белые' : 'ждём...') + '</div>' +
     '</div>' +
     '<div class="player-row">' +
-      '<div class="player-avatar b">' + (isBot(b) ? '🤖' : 'Ч') + '</div>' +
+      '<div class="player-avatar' + (isBot(b) ? ' bot' : ' b') + '">' + (isBot(b) ? 'К' : 'Ч') + '</div>' +
       '<div class="player-name">' + (b ? esc(b) + (b === me ? ' <span style="color:var(--muted);font-weight:normal">(ты)</span>' : '') : '') + '</div>' +
       '<div class="player-badge' + (b ? '' : ' pending') + '">' + (b ? 'чёрные' : 'ждём...') + '</div>' +
     '</div>';
@@ -1864,7 +1870,7 @@ function renderRooms() {
     return '<div class="room-item" data-room="' + esc(r.id) + '">' +
       '<div style="display:flex;align-items:center;justify-content:space-between;gap:10px">' +
         '<div class="room-title" style="display:flex;align-items:center;min-width:0">' +
-          (r.locked ? LOCK_SVG : '') + (r.bot ? '<span class="bot-pill" style="margin-right:6px">🤖 Игра с компьютером</span>' : '') + '<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(r.name) + '</span>' +
+          (r.locked ? LOCK_SVG : '') + (r.bot ? '<span class="bot-pill" style="margin-right:6px">Игра с компьютером</span>' : '') + '<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(r.name) + '</span>' +
         '</div>' +
         '<span class="section-pill">' + r.players + '/2</span>' +
       '</div>' +
@@ -2123,11 +2129,12 @@ $('createRoomModal').addEventListener('click', e => { if (e.target === $('create
 // ---------- Компьютер в комнате ----------
 function updateBotButtons() {
   const hasBot = !!(room && room.bot);
-  const invite = $('botBtn'), kick = $('botKickBtn');
+  const invite = $('botBtn'), kick = $('botKickBtn'), draw = $('drawBtn');
   if (!invite || !kick) return;
   const full = room && room.players >= 2 && !hasBot;
   invite.style.display = (!hasBot && !full) ? 'block' : 'none';
   kick.style.display = hasBot ? 'block' : 'none';
+  if (draw) draw.style.display = hasBot ? 'none' : 'block';   // с ботом ничьей нет
 }
 $('botBtn').addEventListener('click', () => send({type: 'bot'}));
 $('botKickBtn').addEventListener('click', () => {
