@@ -434,9 +434,9 @@ async def handler(ws):
                         g.resigned = bc
                         g.deadline = None
                         await broadcast(room, {'type': 'system', 'text': 'Компьютер выключен — партия прервана', 'state': g.state()})
-                        notify_lobby()
                     else:
                         await broadcast(room, {'type': 'system', 'text': 'Компьютер покинул комнату', 'state': g.state()})
+                    broadcast_sync(room, {'type': 'room', 'room': room_public(room)})
                     broadcast_sync(room, {'type': 'players', 'players': room['players']})
                     notify_lobby()
                     continue
