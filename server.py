@@ -141,6 +141,63 @@ class Game:
                 'moveTime': self.move_time, 'timeLeft': left}
 
 
+# ---------------- Бот ----------------
+
+BOT_NAME = 'Компьютер'
+BOT_DEPTH = 2   # глубина поиска material-эвристики
+
+def bot_pick_move(g):
+    """Ход бота: перебор глубины 2 по материалу (взятия/мат) + шум."""
+    import random
+    board = g.b
+    legal = list(board.legal_moves)
+    if not legal: return None
+    best, best_score = None, None
+    for mv in legal:
+        score = random.uniform(0, 2)
+        cap = board.piece_at(mv.to_square)
+        if cap:
+            score += PIECE_VAL[cap.symbol().upper()] * 10
+        if mv.promotion:
+            score += 80
+        board.push(mv)
+        if board.is_checkmate():
+            score += 1000
+        elif not board.is_game_over():
+            # лучший ответ соперника (жадный по взятиям)
+            opp_gain = 0
+            for omv in board.legal_moves:
+                ocap = board.piece_at(omv.to_square)
+                if ocap:
+                    opp_gain = max(opp_gain, PIECE_VAL[ocap.symbol().upper()] * 10)
+                # мат от соперника?
+                board.push(omv)
+                if board.is_checkmate():
+                    opp_gain = 999
+                board.pop()
+            score -= opp_gain
+        board.pop()
+        if best_score is None or score > best_score:
+            best_score, best = score, mv
+    return best
+
+async def bot_play_if_turn(r):
+    """Если очередь бота — сходить (с маленькой задержкой на реалистичность)."""
+    g = r['game']
+    if g.status() != 'active': return
+    bot_color = r['bot_color']
+    if g.turn_color() != bot_color: return
+    mv = bot_pick_move(g)
+    if mv is None: return
+    sx, sy = chess.square_file(mv.from_square), 7 - chess.square_rank(mv.from_square)
+    tx, ty = chess.square_file(mv.to_square), 7 - chess.square_rank(mv.to_square)
+    res = g.apply_move(sx, sy, tx, ty, promote=(chess.piece_symbol(mv.promotion).upper() if mv.promotion else None))
+    if res is None: return
+    await broadcast(r, {'type': 'move', 'bot': True, 'from': [sx, sy], 'to': [tx, ty],
+                        'piece': res['captured'] and None, 'state': g.state()})
+    if g.status() != 'active':
+        notify_lobby()
+
 # ---------------- Комнаты и WS ----------------
 
 ROOMS = {}      # room_id -> {'id','name','password','created','game','clients':{ws:name},'chat':[],'players':{...}}
@@ -153,6 +210,7 @@ def room_public(r):
     return {'id': r['id'], 'name': r['name'], 'players': len(r['clients']),
             'status': r['game'].status(), 'created': r['created'],
             'locked': bool(r.get('password')),
+            'bot': bool(r.get('bot_color')),
             'moveTime': r['game'].move_time}
 
 def notify_lobby():
@@ -190,14 +248,18 @@ def leave_room(r, ws):
 def broadcast_sync(r, obj):
     asyncio.ensure_future(broadcast(r, obj))
 
-async def enter_room(ws, r, name):
+async def enter_room(ws, r, name, is_bot=False):
     """Поместить соединение в комнату: дедуп имени, цвет, welcome, нотификации."""
     n = 1
     base = name
     while name in r['clients'].values():
         n += 1; name = f'{base} {n}'
     r['clients'][ws] = name
-    if r['players']['w'] is None: r['players']['w'] = name
+    if is_bot:
+        # бот занимает противоположный слот от человека
+        human_color = 'b' if r['bot_color'] == 'w' else 'w'
+        r['players'][r['bot_color']] = name
+    elif r['players']['w'] is None: r['players']['w'] = name
     elif r['players']['b'] is None: r['players']['b'] = name
     LOBBY.discard(ws)
     # оба на месте и лимит задан — запускаем часы
@@ -211,7 +273,18 @@ async def enter_room(ws, r, name):
     broadcast_sync(r, {'type': 'room', 'room': room_public(r)})
     broadcast_sync(r, {'type': 'players', 'players': r['players']})
     notify_lobby()
+    # бот играет за свой цвет (с задержкой)
+    if is_bot:
+        asyncio.ensure_future(bot_turn_soon(r))
     return name
+
+async def bot_turn_soon(r, delay=1.2):
+    """Бот думает непродолжительное время и ходит, если его очередь."""
+    await asyncio.sleep(delay)
+    try:
+        await bot_play_if_turn(r)
+    except Exception:
+        pass
 
 async def try_premove(room):
     """Если игрок заготовил ход наперёд и пришла его очередь — применить его.
@@ -275,6 +348,7 @@ async def handler(ws):
                     continue
                 room = r
                 r.setdefault('premove', None)
+                r.setdefault('bot_color', None)
                 if len(r['clients']) >= 2:
                     await ws.send(json.dumps({'type': 'error', 'text': 'Комната заполнена (макс. 2 игрока)'}, ensure_ascii=False))
                     room = None
@@ -301,7 +375,7 @@ async def handler(ws):
                 room_id = 'r-' + secrets.token_hex(4)
                 r = {'id': room_id, 'name': rname, 'password': password, 'created': now(),
                      'game': game, 'clients': {}, 'chat': [], 'players': {'w': None, 'b': None},
-                     'requests': {}, 'premove': None}
+                     'requests': {}, 'premove': None, 'bot_color': None}
                 ROOMS[room_id] = r
                 room = r
                 name = await enter_room(ws, r, name)
@@ -333,6 +407,58 @@ async def handler(ws):
                                    'from': [frm[0], frm[1]], 'to': [to[0], to[1]],
                                    'promote': msg.get('promote') or None}
                 await ws.send(json.dumps({'type': 'premove', 'ok': True, 'from': [frm[0], frm[1]], 'to': [to[0], to[1]]}))
+
+            elif t == 'bot' and room:
+                # позвать бота в комнату / выгнать его
+                if msg.get('kick'):
+                    if not room.get('bot_color'):
+                        await ws.send(json.dumps({'type': 'error', 'text': 'В комнате нет компьютера'}, ensure_ascii=False))
+                        continue
+                    bc = room['bot_color']
+                    bname = room['players'].get(bc)
+                    room['bot_color'] = None
+                    # бот «выходит»: чистим слот
+                    if room['players'].get(bc) == bname:
+                        room['players'][bc] = None
+                    # если шла партия — она окончена сдачей бота
+                    g = room['game']
+                    if g.status() == 'active' and g.moves > 0:
+                        g.resigned = bc
+                        g.deadline = None
+                        await broadcast(room, {'type': 'system', 'text': 'Компьютер выключен — партия прервана', 'state': g.state()})
+                        notify_lobby()
+                    else:
+                        await broadcast(room, {'type': 'system', 'text': 'Компьютер покинул комнату', 'state': g.state()})
+                    broadcast_sync(room, {'type': 'players', 'players': room['players']})
+                    notify_lobby()
+                    continue
+                # позвать: только если в комнате 1 человек и бот не сидит
+                if room.get('bot_color'):
+                    await ws.send(json.dumps({'type': 'error', 'text': 'Компьютер уже в комнате'}, ensure_ascii=False))
+                    continue
+                if len(room['clients']) >= 2:
+                    await ws.send(json.dumps({'type': 'error', 'text': 'Комната занята двумя игроками'}, ensure_ascii=False))
+                    continue
+                # цвет бота: противоположный единственному человеку
+                human_color = 'w' if room['players'].get('w') else 'b'
+                if not room['players'].get('w') and not room['players'].get('b'):
+                    await ws.send(json.dumps({'type': 'error', 'text': 'Ждём второго игрока или позови компьютер', 'sorted': True}, ensure_ascii=False))
+                    continue
+                room['bot_color'] = 'b' if human_color == 'w' else 'w'
+                # бот «заходит» как виртуальный игрок
+                fake_ws = None   # бот не имеет ws; игроки видят его в списке
+                bc = room['bot_color']
+                room['players'][bc] = BOT_NAME
+                g = room['game']
+                # бот чёрный? он стартует только после хода белых
+                await broadcast(room, {'type': 'system', 'text': 'Компьютер присоединился к партии', 'state': g.state()})
+                broadcast_sync(room, {'type': 'players', 'players': room['players']})
+                broadcast_sync(room, {'type': 'room', 'room': room_public(r=room)})
+                notify_lobby()
+                # если бот белые — стартует часы и ход
+                if g.move_time and room['players']['w'] and room['players']['b'] and g.status() == 'active' and not g.deadline:
+                    g.deadline = now() + g.move_time
+                asyncio.ensure_future(bot_turn_soon(room, delay=0.8))
 
             elif t == 'leave' and room:
                 # явный выход: сразу освобождаем место и слот цвета
@@ -399,6 +525,9 @@ async def handler(ws):
                 if g.status() != 'active':
                     notify_lobby()   # комната «в игре» -> «свободна/окончена» в лобби
                 await try_premove(room)
+                # очередь бота — он думает и ходит
+                if room.get('bot_color') and g.status() == 'active':
+                    asyncio.ensure_future(bot_turn_soon(room))
 
             # (авто-ход наперёд вынесен в хелпер ниже)
             elif t == 'reset' and room:
@@ -406,7 +535,23 @@ async def handler(ws):
                     await ws.send(json.dumps({'type': 'error', 'text': 'Ждём второго игрока'}, ensure_ascii=False))
                     continue
                 # смена сторон: кто играл белыми — теперь чёрными
-                room['players']['w'], room['players']['b'] = room['players']['b'], room['players']['w']
+                # бот при этом меняет цвет вместе с человеком? НЕТ: у бота фиксированный
+                # слот bot_color — человек меняется с ботом местами
+                bc = room.get('bot_color')
+                if bc:
+                    # человек и бот меняются цветами
+                    room['bot_color'] = 'w' if bc == 'b' else 'b'
+                    bc = room['bot_color']
+                    room['players']['w'], room['players']['b'] = room['players']['b'], room['players']['w']
+                    # восстановить имена на слотах после swap
+                    room['players'][bc] = BOT_NAME
+                    human_slot = 'w' if bc == 'b' else 'b'
+                    human_names = [nm for nm in room['players'].values() if nm and nm != BOT_NAME]
+                    # человек теперь на противоположном слоте
+                    hn = [nm for ws, nm in room['clients'].items() if ws is not None][0] if room['clients'] else None
+                    room['players'][human_slot] = hn
+                else:
+                    room['players']['w'], room['players']['b'] = room['players']['b'], room['players']['w']
                 ng = Game(move_time=room['game'].move_time)
                 if ng.move_time and room['players']['w'] and room['players']['b']:
                     ng.deadline = now() + ng.move_time
@@ -426,6 +571,29 @@ async def handler(ws):
                 if g.status() != 'active':
                     await ws.send(json.dumps({'type': 'error', 'text': 'Партия уже окончена'}, ensure_ascii=False))
                     continue
+                # против компьютера: бот сам решает
+                bc = room.get('bot_color')
+                if bc:
+                    if t == 'undo':
+                        # бот соглашается на отмену хода (мягкий характер)
+                        ok = g.moves >= 2
+                        if ok:
+                            g.undo(2)
+                            room['premove'] = None
+                            await broadcast(room, {'type': 'system', 'text': 'Компьютер согласился отменить ход', 'state': g.state()})
+                        else:
+                            await ws.send(json.dumps({'type': 'error', 'text': 'Ходов ещё не было', 'sorted': False}, ensure_ascii=False))
+                        continue
+                    else:
+                        # на ничью бот соглашается при равном материале, иначе отказ
+                        agree = abs(g.material()) <= 1
+                        if agree:
+                            g.draw_agreed = True
+                            await broadcast(room, {'type': 'system', 'text': 'Компьютер согласился на ничью', 'state': g.state()})
+                            notify_lobby()
+                        else:
+                            await ws.send(json.dumps({'type': 'request_done', 'kind': 'draw', 'ok': False, 'text': 'Компьютер отклонил ничью'}))
+                        continue
                 other = room['players'].get('b' if room['players'].get('w') == name else 'w')
                 if not other:
                     await ws.send(json.dumps({'type': 'error', 'text': 'Соперник не в комнате'}, ensure_ascii=False))
