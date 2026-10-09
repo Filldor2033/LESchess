@@ -1075,6 +1075,24 @@ button:disabled { opacity: 0.6; cursor: not-allowed; transform: none; }
     </div>
 </div>
 
+<!-- ============ Модалка: позвать компьютер ============ -->
+<div id="botModal" class="modal-overlay" style="display:none">
+    <div class="glass-panel modal" role="dialog" aria-modal="true">
+        <div class="section">
+            <div class="section-title">Позвать компьютер</div>
+            <div class="modal-hint">Выбери сложность — её можно будет сменить только выгнав и позвав снова.</div>
+            <select id="botLevelSelect">
+                <option value="easy">Лёгкий — для разминки</option>
+                <option value="normal" selected>Средний — обычная игра</option>
+                <option value="hard">Сильный — придётся постараться</option>
+                <option value="master">Мастер — Штокфиш на максимум</option>
+            </select>
+            <button id="botModalGo" type="button">Позвать</button>
+            <button id="botModalCancel" class="secondary" type="button">Отмена</button>
+        </div>
+    </div>
+</div>
+
 <!-- ============ Модалка: время на ход ============ -->
 <div id="timeModal" class="modal-overlay" style="display:none">
     <div class="glass-panel modal" role="dialog" aria-modal="true">
@@ -1498,7 +1516,7 @@ function renderRoom() {
 function renderPlayers() {
   const box = $('playersBox');
   const w = players.w, b = players.b;
-  const isBot = nm => nm === 'Компьютер';
+  const isBot = nm => nm && nm.startsWith('Компьютер');
   box.innerHTML =
     '<div class="player-row">' +
       '<div class="player-avatar' + (isBot(w) ? ' bot' : '') + '">' + (isBot(w) ? 'К' : 'Б') + '</div>' +
@@ -2136,7 +2154,16 @@ function updateBotButtons() {
   kick.style.display = hasBot ? 'block' : 'none';
   if (draw) draw.style.display = hasBot ? 'none' : 'block';   // с ботом ничьей нет
 }
-$('botBtn').addEventListener('click', () => send({type: 'bot'}));
+$('botBtn').addEventListener('click', () => {
+  $('botLevelSelect').value = 'normal';
+  $('botModal').style.display = 'flex';
+});
+$('botModalCancel').addEventListener('click', () => { $('botModal').style.display = 'none'; });
+$('botModal').addEventListener('click', e => { if (e.target === $('botModal')) $('botModal').style.display = 'none'; });
+$('botModalGo').addEventListener('click', () => {
+  send({type: 'bot', level: $('botLevelSelect').value});
+  $('botModal').style.display = 'none';
+});
 $('botKickBtn').addEventListener('click', () => {
   openConfirm('Выгнать компьютер', 'Компьютер покинет комнату. Если партия уже идёт — она будет прервана (ничьей не будет). Выгнать?', () => {
     send({type: 'bot', kick: true});

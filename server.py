@@ -158,11 +158,33 @@ def _find_stockfish():
             return path
     return None
 
-def sf_get():
-    """Общий инстанс движка (одна копия на сервер)."""
+# уровни сложности: имя -> (UCI_Elo, Skill Level, сек на ход)
+BOT_LEVELS = {
+    'easy':   ('Лёгкий',   1350,  2, 0.05),
+    'normal': ('Средний',  1700,  8, 0.1),
+    'hard':   ('Сильный',  2200, 14, 0.2),
+    'master': ('Мастер',   3000, 20, 0.4),
+}
+
+def bot_display_name(level):
+    """Имя бота с уровнем: «Компьютер (Средний)»."""
+    return f'{BOT_NAME} ({BOT_LEVELS.get(level, BOT_LEVELS["normal"])[0]})'
+
+def sf_get(level=None):
+    """ОДИН общий движок (уровень задаётся per-request в play())."""
     global _sf_engine, STOCKFISH_BIN
     if _sf_engine is not None:
-        return _sf_engine
+        # проверка живости: мёртвый процесс — пересоздаём
+        try:
+            if _sf_engine.ping():
+                return _sf_engine
+        except Exception:
+            pass
+        try:
+            _sf_engine.quit()
+        except Exception:
+            pass
+        _sf_engine = None
     STOCKFISH_BIN = STOCKFISH_BIN or _find_stockfish()
     if not STOCKFISH_BIN:
         return None
@@ -174,19 +196,31 @@ def sf_get():
         _sf_engine = None
         return None
 
+def bot_think_time(level):
+    return BOT_LEVELS.get(level, BOT_LEVELS['normal'])[3]
+
+def bot_options(level):
+    """UCI-опции уровня для передачи в engine.play()."""
+    if level not in BOT_LEVELS:
+        level = 'normal'
+    _, elo, skill, _t = BOT_LEVELS[level]
+    return {'UCI_Elo': elo, 'Skill Level': skill}
+
 async def bot_play_if_turn(r):
-    """Если очередь бота — Stockfish выбирает ход (быстро, с паузой на естественность)."""
+    """Если очередь бота — Stockfish выбирает ход (уровень сложности комнаты)."""
     g = r['game']
     if g.status() != 'active': return
     bot_color = r['bot_color']
     if g.turn_color() != bot_color: return
-    eng = sf_get()
+    level = r.get('bot_level') or 'normal'
+    eng = sf_get(level)
     if eng is None:
         return   # движка нет — бот молчит (клиент покажет отсутствие хода)
     try:
-        # ограничение: 0.2 сек thinking time — за глаза и не грузит VPS
+        t = bot_think_time(level)
+        opts = bot_options(level)
         result = await asyncio.get_event_loop().run_in_executor(
-            None, lambda: eng.play(g.b.copy(), chess.engine.Limit(time=0.2)))
+            None, lambda: eng.play(g.b.copy(), chess.engine.Limit(time=t), options=opts))
         mv = result.move
     except Exception:
         return
@@ -215,6 +249,7 @@ def room_public(r):
             'status': r['game'].status(), 'created': r['created'],
             'locked': bool(r.get('password')),
             'bot': bool(r.get('bot_color')),
+            'botLevel': r.get('bot_level') or 'normal',
             'moveTime': r['game'].move_time}
 
 def notify_lobby():
@@ -425,6 +460,7 @@ async def handler(ws):
                     bc = room['bot_color']
                     bname = room['players'].get(bc)
                     room['bot_color'] = None
+                    room['bot_level'] = None
                     # бот «выходит»: чистим слот
                     if room['players'].get(bc) == bname:
                         room['players'][bc] = None
@@ -453,10 +489,14 @@ async def handler(ws):
                     await ws.send(json.dumps({'type': 'error', 'text': 'Ждём второго игрока или позови компьютер', 'sorted': True}, ensure_ascii=False))
                     continue
                 room['bot_color'] = 'b' if human_color == 'w' else 'w'
+                # уровень сложности
+                level = msg.get('level') or 'normal'
+                if level not in BOT_LEVELS: level = 'normal'
+                room['bot_level'] = level
                 # бот «заходит» как виртуальный игрок
-                fake_ws = None   # бот не имеет ws; игроки видят его в списке
                 bc = room['bot_color']
-                room['players'][bc] = BOT_NAME
+                lvl_name = BOT_LEVELS[level][0]
+                room['players'][bc] = f'{BOT_NAME} ({lvl_name})'
                 g = room['game']
                 # бот чёрный? он стартует только после хода белых
                 await broadcast(room, {'type': 'system', 'text': 'Компьютер присоединился к партии', 'state': g.state()})
@@ -539,7 +579,16 @@ async def handler(ws):
 
             # (авто-ход наперёд вынесен в хелпер ниже)
             elif t == 'reset' and room:
-                if not room['players'].get('w') or not room['players'].get('b'):
+                alone = not room['players'].get('w') or not room['players'].get('b')
+                if alone and not room.get('bot_color'):
+                    # один человек без бота: пересоздать партию можно, стороны не трогаем
+                    room['game'] = Game(move_time=room['game'].move_time)
+                    room['requests'].clear()
+                    room['premove'] = None
+                    await broadcast(room, {'type': 'system', 'text': 'Новая партия', 'state': room['game'].state()})
+                    notify_lobby()
+                    continue
+                if alone:
                     await ws.send(json.dumps({'type': 'error', 'text': 'Ждём второго игрока'}, ensure_ascii=False))
                     continue
                 # смена сторон: кто играл белыми — теперь чёрными
@@ -552,7 +601,7 @@ async def handler(ws):
                     bc = room['bot_color']
                     room['players']['w'], room['players']['b'] = room['players']['b'], room['players']['w']
                     # восстановить имена на слотах после swap
-                    room['players'][bc] = BOT_NAME
+                    room['players'][bc] = bot_display_name(room.get('bot_level'))
                     human_slot = 'w' if bc == 'b' else 'b'
                     human_names = [nm for nm in room['players'].values() if nm and nm != BOT_NAME]
                     # человек теперь на противоположном слоте
