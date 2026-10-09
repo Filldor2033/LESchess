@@ -1727,7 +1727,8 @@ function attachPieceDrag(cell, x, y) {
       sel = [x, y];
       hints = [];
       boardEl.querySelectorAll('.cell.sel').forEach(c => c.classList.remove('sel'));
-      boardEl.querySelectorAll('.hintdot, .hintcap').forEach(c => { c.remove(); c.classList.remove('hintcap'); });
+      boardEl.querySelectorAll('.hintdot').forEach(d => d.remove());
+      boardEl.querySelectorAll('.cell.hintcap').forEach(c => c.classList.remove('hintcap'));
       cell.classList.add('sel');
       send({type: 'moves', x, y});
       hintsPending = true;
