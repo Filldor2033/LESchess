@@ -1629,6 +1629,13 @@ function renderBoard() {
   // активный драг: полный пересбор DOM убьёт pointer-capture и ghost —
   // откладываем до отпускания фигуры
   if (drag && !drag.moved) { dragRenderPending = true; return; }
+  // драг «потерян»: его piece-нода больше не на доске (DOM пересобрали
+  // чужим ходом) — снимаем ghost и сбрасываем drag, иначе ghost висит
+  // поверх доски и выглядит как перемешанная позиция
+  if (drag && drag.moved && !boardEl.contains(drag.piece)) {
+    if (drag.ghost) drag.ghost.remove();
+    drag = null;
+  }
   const flip = myColor === 'b';
   boardEl.innerHTML = '';
   for (let vy = 0; vy < 8; vy++) {
@@ -1841,6 +1848,24 @@ function onCellClick(x, y) {
   sel = null; hints = [];
   renderBoard();
 }
+
+// ---------- Диагностика доски ----------
+// сверка DOM↔state каждые 500 мс: расхождение = глитч; копим в window.__glitchLog
+window.__glitchLog = [];
+setInterval(() => {
+  try {
+    if (!state || !document.getElementById('board')) return;
+    let need = 0, have = 0;
+    for (let y = 0; y < 8; y++) for (let x = 0; x < 8; x++) if (state.board[y][x]) need++;
+    have = document.querySelectorAll('#board .piece').length;
+    if (need !== have) {
+      const rec = {t: Date.now(), need, have, moves: state.moves, ghost: !!document.querySelector('.drag-ghost')};
+      window.__glitchLog.push(rec);
+      if (window.__glitchLog.length > 50) window.__glitchLog.shift();
+      console.warn('GLITCH', rec);
+    }
+  } catch (e) {}
+}, 500);
 
 // ---------- Чат ----------
 function addChatMsg(m) {
