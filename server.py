@@ -212,6 +212,15 @@ async def bot_play_if_turn(r):
     if g.status() != 'active': return
     bot_color = r['bot_color']
     if g.turn_color() != bot_color: return
+    # анти-двойной-ход: если бот уже думает в этой комнате — выходим
+    if r.get('bot_busy'): return
+    r['bot_busy'] = True
+    try:
+        await _bot_move(r, g, bot_color)
+    finally:
+        r['bot_busy'] = False
+
+async def _bot_move(r, g, bot_color):
     level = r.get('bot_level') or 'normal'
     eng = sf_get(level)
     if eng is None:
@@ -233,6 +242,10 @@ async def bot_play_if_turn(r):
                         'piece': res['captured'] and None, 'state': g.state()})
     if g.status() != 'active':
         notify_lobby()
+    else:
+        # очередь игрока: применить его заготовленный ход (premove), как после
+        # человеческого хода — иначе премув зависает до следующего хода игрока
+        await try_premove(r)
 
 # ---------------- Комнаты и WS ----------------
 

@@ -1652,6 +1652,7 @@ function renderBoard() {
       if (p) {
         const s = document.createElement('span');
         s.className = 'piece';
+        s.dataset.p = p;   // диагностика: тип/цвет фигуры в DOM
         if (state.status === 'active' && p[0] === myColor && p[0] === state.turn) {
           s.classList.add('draggable');
         }
@@ -1850,19 +1851,35 @@ function onCellClick(x, y) {
 }
 
 // ---------- Диагностика доски ----------
-// сверка DOM↔state каждые 500 мс: расхождение = глитч; копим в window.__glitchLog
+// полная сверка DOM↔state каждые 500 мс (каждая клетка!): расхождение = глитч
 window.__glitchLog = [];
+window.__boardSnapshot = () => {   // дамп позиции для отчёта
+  try {
+    const out = [];
+    for (let y = 0; y < 8; y++) { const row = []; for (let x = 0; x < 8; x++) {
+      const cell = document.querySelector('.cell[data-x="' + x + '"][data-y="' + y + '"]');
+      const pe = cell && cell.querySelector('.piece');
+      row.push(pe ? (pe.querySelector('svg') ? '?' : '?') : null);
+    } out.push(row); }
+    return out;
+  } catch (e) { return null; }
+};
 setInterval(() => {
   try {
     if (!state || !document.getElementById('board')) return;
-    let need = 0, have = 0;
-    for (let y = 0; y < 8; y++) for (let x = 0; x < 8; x++) if (state.board[y][x]) need++;
-    have = document.querySelectorAll('#board .piece').length;
-    if (need !== have) {
-      const rec = {t: Date.now(), need, have, moves: state.moves, ghost: !!document.querySelector('.drag-ghost')};
+    const diffs = [];
+    for (let y = 0; y < 8; y++) for (let x = 0; x < 8; x++) {
+      const cell = document.querySelector('.cell[data-x="' + x + '"][data-y="' + y + '"]');
+      const pe = cell && cell.querySelector('.piece');
+      const domP = pe ? pe.dataset.p : null;
+      const stP = state.board[y][x] || null;
+      if (domP !== stP) diffs.push({x, y, dom: domP, st: stP});
+    }
+    if (diffs.length) {
+      const rec = {t: Date.now(), moves: state.moves, diffs, ghost: !!document.querySelector('.drag-ghost')};
       window.__glitchLog.push(rec);
       if (window.__glitchLog.length > 50) window.__glitchLog.shift();
-      console.warn('GLITCH', rec);
+      console.warn('GLITCH', JSON.stringify(rec));
     }
   } catch (e) {}
 }, 500);
