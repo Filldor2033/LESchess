@@ -1295,12 +1295,13 @@ function processQueue() {
     try { handleMessage(JSON.parse(raw)); } catch (err) { console.error(err); }
   }
   processing = false;
-  // отложенный единый рендер
+  // единый рендер в СЛЕДУЮЩЕМ кадре браузера: если за это время придёт ещё
+  // пакет сообщений — всё склеится в один рендер (анти-мерцание/глитч)
   if (renderQueued && renderFn) {
     const fn = renderFn;
     renderQueued = false;
     renderFn = null;
-    fn();
+    requestAnimationFrame(() => { try { fn(); } catch (err) { console.error(err); } });
   }
   // страховка оверлея: партия активна — плашки «окончена» быть не должно
   if (state && state.status === 'active') {
@@ -1379,10 +1380,10 @@ function handleMessage(m) {
       addChatMsg({type: 'system', text: m.text});
       if (m.state) {
         state = m.state; sel = null; hints = []; lastMove = null;
-        // рендерим СРАЗУ (важен порядок: оверлей должен уйти синхронно)
-        renderRoom();
+        // через очередь: в пакете следом может прийти players со сменой цвета —
+        // рисуем один раз, после всех обновлений
+        queueRender(renderRoom);
         restartClock();
-        // смена сторон/лимита: оверлей «окончена» уходит при активном state
       }
       break;
     case 'players':
@@ -1432,7 +1433,8 @@ function handleMessage(m) {
             }
           }
         } else {
-          renderBoard();
+          // не рисуем доску посреди пакета — отложим до конца (следующий кадр)
+          requestAnimationFrame(() => { try { renderBoard(); } catch (err) {} });
         }
       }
       break;
@@ -1630,8 +1632,13 @@ function renderGameover() {
 }
 
 // ---------- Доска ----------
+let dragRenderPending = false;   // renderBoard отложен из-за активного драга
+
 function renderBoard() {
   if (!state) return;
+  // активный драг: полный пересбор DOM убьёт pointer-capture и ghost —
+  // откладываем до отпускания фигуры
+  if (drag && !drag.moved) { dragRenderPending = true; return; }
   const flip = myColor === 'b';
   boardEl.innerHTML = '';
   for (let vy = 0; vy < 8; vy++) {
@@ -1746,6 +1753,7 @@ function attachPieceDrag(cell, x, y) {
     const d = drag;
     const pending = d.hintsPending;   // подсказки ещё не пришли с сервера
     drag = null;
+    if (dragRenderPending) { dragRenderPending = false; renderBoard(); }
     if (d.ghost) d.ghost.remove();
     clearDropHighlight();
     if (!d.moved) return;                      // это был клик — click-хендлер сам разберётся
