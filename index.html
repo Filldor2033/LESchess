@@ -1238,6 +1238,7 @@ let players = {w: null, b: null};
 let sel = null;
 let hints = [];
 let hintsPending = false;
+let movesAtRequest = null;   // state.moves на момент запроса подсказок
 let lastMove = null;
 let inRoom = false;
 
@@ -1330,8 +1331,8 @@ function handleMessage(m) {
       state = m.state;
       inRoom = true;
       clockEnds = null;
-      lastRenderedMoveNo = -1;
-      renderEpoch = 0;
+
+
       myPremove = null;
       sessionStorage.setItem('chess_room', m.room.id);
       sessionStorage.setItem('chess_room_name', m.room.name);
@@ -1408,8 +1409,9 @@ function handleMessage(m) {
       }
       break;
     case 'moves':
-      // устаревший ответ (позиция уже изменилась) — подсказки неактуальны
-      if (state && state.moves > 0 && state.moves < lastRenderedMoveNo) break;
+      // позиция изменилась после запроса подсказок (ход соперника и т.п.) —
+      // подсказки посчитаны по старой расстановке, не рисуем
+      if (movesAtRequest !== null && state && state.moves !== movesAtRequest) break;
       // фигуры под sel уже нет (ход/взятие изменили позицию) — подсказки не рисуем
       if (sel && (!state.board[sel[1]] || !state.board[sel[1]][sel[0]])) {
         hints = []; hintsPending = false;
@@ -1489,22 +1491,10 @@ function flashError(text) {
 }
 
 // ---------- Рендер ----------
-let lastRenderedMoveNo = -1;   // номер state.moves последнего отрисованного state
-let renderEpoch = 0;            // растёт при каждой новой партии (reset)
-
-function stateEpochKey(st) {
-  // упорядочивание эпох: resets считаются «новее» любого числа полуходов
-  return st.moves + 1000000 * renderEpoch;
-}
-
 function renderRoom() {
-  // анти-«перемешивание»: игнорируем устаревшие state (приходят с опозданием).
-  // reset (moves=0 при активной партии) — новая эпоха, всегда легитимен
-  if (state && state.moves === 0 && lastRenderedMoveNo !== -1 && state.status === 'active') {
-    renderEpoch++;
-  }
-  if (state && state.moves > 0 && state.moves < lastRenderedMoveNo) return;
-  if (state) lastRenderedMoveNo = state.moves;
+  // ВСЕ входящие state приходят по TCP в порядке отправки — последний всегда
+  // актуальнейший (undo уменьшает номер полухода, reset обнуляет; прежний
+  // гард «младше — не рисовать» из-за этого застревал на старой позиции)
   renderBoard();
   renderPlayers();
   renderBadge();
@@ -1837,6 +1827,7 @@ function onCellClick(x, y) {
     hints = [];
     renderBoard();
     hintsPending = true;
+    movesAtRequest = state ? state.moves : null;
     send({type: 'moves', x, y});
     return;
   }
