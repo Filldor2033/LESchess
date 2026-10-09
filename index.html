@@ -1297,18 +1297,28 @@ function processQueue() {
   }
   processing = false;
   // единый рендер в СЛЕДУЮЩЕМ кадре браузера: если за это время придёт ещё
-  // пакет сообщений — всё склеится в один рендер (анти-мерцание/глитч)
+  // пакет сообщений — всё склеится в один рендер (анти-мерцание/глитч).
+  // ВАЖНО: rAF НЕ работает в фоновой вкладке — страхуемся таймером
+  // (в фоне setTimeout троттлится, но срабатывает): рендер не зависает
   if (renderQueued && renderFn) {
     const fn = renderFn;
     renderQueued = false;
     renderFn = null;
-    requestAnimationFrame(() => { try { fn(); } catch (err) { console.error(err); } });
+    scheduleRender(fn);
   }
   // страховка оверлея: партия активна — плашки «окончена» быть не должно
   if (state && state.status === 'active') {
     const go = $('gameover');
     if (go && go.classList.contains('show')) go.classList.remove('show');
   }
+}
+
+function scheduleRender(fn) {
+  // первый исполнившийся из [rAF, setTimeout] — второй сработает вхолостую
+  let done = false;
+  const run = () => { if (done) return; done = true; try { fn(); } catch (err) { console.error(err); } };
+  requestAnimationFrame(run);
+  setTimeout(run, 60);
 }
 
 function queueRender(fn) {
@@ -1435,8 +1445,9 @@ function handleMessage(m) {
             }
           }
         } else {
-          // не рисуем доску посреди пакета — отложим до конца (следующий кадр)
-          requestAnimationFrame(() => { try { renderBoard(); } catch (err) {} });
+          // не рисуем доску посреди пакета — отложим до конца (следующий кадр);
+          // scheduleRender не зависает в фоновой вкладке
+          scheduleRender(renderBoard);
         }
       }
       break;
@@ -1495,6 +1506,7 @@ function renderRoom() {
   // ВСЕ входящие state приходят по TCP в порядке отправки — последний всегда
   // актуальнейший (undo уменьшает номер полухода, reset обнуляет; прежний
   // гард «младше — не рисовать» из-за этого застревал на старой позиции)
+  if (state) lastRenderedMoves = state.moves;
   renderBoard();
   renderPlayers();
   renderBadge();
@@ -1623,6 +1635,7 @@ function renderGameover() {
 
 // ---------- Доска ----------
 let dragRenderPending = false;   // renderBoard отложен из-за активного драга
+let lastRenderedMoves = -1;     // state.moves последнего ОТРИСОВАННОГО кадра
 
 function renderBoard() {
   if (!state) return;
@@ -1849,6 +1862,23 @@ function onCellClick(x, y) {
   sel = null; hints = [];
   renderBoard();
 }
+
+// ---------- Страховка рендера при возврате в вкладку ----------
+// rAF в фоне заморожен; при возвращении (visibilitychange) и просто каждые
+// 2с — если state менялся после последнего рендера, дорисовываем
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) renderRoom();
+});
+setInterval(() => {
+  try {
+    if (document.hidden || !state || !document.getElementById('board')) return;
+    // дёшево: сверим количество полуходов с последним отрисованным
+    if (state.moves !== lastRenderedMoves) {
+      lastRenderedMoves = state.moves;
+      renderRoom();
+    }
+  } catch (e) {}
+}, 2000);
 
 // ---------- Диагностика доски ----------
 // полная сверка DOM↔state каждые 500 мс (каждая клетка!): расхождение = глитч
